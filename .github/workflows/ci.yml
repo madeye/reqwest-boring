@@ -127,11 +127,11 @@ jobs:
             mingw64_path: "C:\\msys64\\mingw64\\bin"
           - name: windows / stable-i686-gnu
             os: windows-latest
-            rust: stable-i686-pc-windows-gnu
+            rust: stable-x86_64-pc-windows-gnu
             target: i686-pc-windows-gnu
             features: "--no-default-features --features blocking,gzip,brotli,zstd,deflate,query,form,json,multipart,stream,native-tls,http2"
             package_name: mingw-w64-i686-gcc
-            mingw64_path: "C:\\msys64\\mingw32\\bin"
+            mingw64_path: "C:\\msys64\\mingw64\\bin"
 
           - name: "feat.: default-tls disabled"
             features: "--no-default-features"
@@ -188,25 +188,37 @@ jobs:
           toolchain: ${{ matrix.rust || 'stable' }}
           targets: ${{ matrix.target }}
 
-      - name: Add mingw-w64 to path for i686-gnu
+      - name: Add MinGW host tools to PATH
         run: |
           printf '%s\n' '${{ matrix.mingw64_path }}' 'C:\msys64\usr\bin' >> "$GITHUB_PATH"
         if: matrix.mingw64_path
         shell: bash
 
       - name: Install x86_64 Clang & NASM
-        if: ${{ matrix.target == 'x86_64-pc-windows-gnu' }}
+        if: matrix.mingw64_path
         run: pacman.exe -Sy --noconfirm mingw-w64-x86_64-clang mingw-w64-x86_64-nasm
         shell: bash
 
-      - name: Add libclang to the environment for windows x86_64-gnu
+      - name: Configure libclang (Windows GNU)
         run: printf '%s\n' 'LIBCLANG_PATH=C:\msys64\mingw64\bin' >> "$GITHUB_ENV"
-        if: ${{ matrix.target == 'x86_64-pc-windows-gnu' }}
+        if: matrix.mingw64_path
         shell: bash
 
       - name: Update gcc
         if: matrix.package_name
         run: pacman.exe -Sy --noconfirm ${{ matrix.package_name }}
+
+      - name: Configure 32-bit MinGW target compiler
+        if: matrix.target == 'i686-pc-windows-gnu'
+        shell: bash
+        run: |
+          # Keep bindgen and build scripts on the 64-bit host; compile target C
+          # libraries and test executables with the 32-bit MinGW toolchain.
+          printf '%s\n' \
+            'CARGO_TARGET_I686_PC_WINDOWS_GNU_LINKER=C:\msys64\mingw32\bin\gcc.exe' \
+            'CC_i686_pc_windows_gnu=C:\msys64\mingw32\bin\gcc.exe' \
+            'CXX_i686_pc_windows_gnu=C:\msys64\mingw32\bin\g++.exe' \
+            'AR_i686_pc_windows_gnu=C:\msys64\mingw32\bin\ar.exe' >> "$GITHUB_ENV"
 
       - name: Install BoringSSL build prerequisites (Linux)
         if: runner.os == 'Linux'
