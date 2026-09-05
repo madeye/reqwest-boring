@@ -221,6 +221,11 @@ jobs:
         shell: pwsh
         run: '"LIBCLANG_PATH=C:\Program Files\LLVM\bin" >> $env:GITHUB_ENV'
 
+      - name: Configure portable BoringSSL (Windows ARM64)
+        if: matrix.target == 'aarch64-pc-windows-msvc'
+        shell: pwsh
+        run: '"CMAKE_TOOLCHAIN_FILE=$env:GITHUB_WORKSPACE/.github/cmake/windows-arm64.cmake" >> $env:GITHUB_ENV'
+
       - name: Create Cargo.lock
         run: cargo update
 
@@ -235,12 +240,11 @@ jobs:
           CI_RUST_TARGET: ${{ matrix.target }}
         run: |
           set -euxo pipefail
-          target_args=()
           if [[ -n "$CI_RUST_TARGET" ]]; then
-            target_args=(--target "$CI_RUST_TARGET")
+            export CARGO_BUILD_TARGET="$CI_RUST_TARGET"
           fi
-          cargo nextest run --locked --workspace "${target_args[@]}" ${{ matrix.features }}
-          cargo test --locked --workspace --doc "${target_args[@]}" ${{ matrix.features }}
+          cargo nextest run --locked --workspace ${{ matrix.features }}
+          cargo test --locked --workspace --doc ${{ matrix.features }}
         shell: bash
 
   features:

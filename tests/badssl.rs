@@ -52,7 +52,7 @@ async fn test_badssl_no_built_in_roots() {
     assert!(result.is_err());
 }
 
-#[cfg(feature = "__native-tls")]
+#[cfg(reqwest_native_tls)]
 #[tokio::test]
 async fn test_badssl_wrong_host() {
     let text = reqwest::Client::builder()

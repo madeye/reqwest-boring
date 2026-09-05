@@ -7,7 +7,7 @@ use boring::{
     rsa::Rsa,
     ssl::{SslAcceptor, SslMethod, SslVerifyMode, SslVersion},
     x509::{
-        extension::{BasicConstraints, SubjectAlternativeName},
+        extension::{BasicConstraints, ExtendedKeyUsage, SubjectAlternativeName},
         X509NameBuilder, X509,
     },
 };
@@ -33,6 +33,14 @@ fn certificate() -> (X509, PKey<Private>) {
         .unwrap();
     cert.append_extension(BasicConstraints::new().critical().ca().build().unwrap())
         .unwrap();
+    cert.append_extension(
+        ExtendedKeyUsage::new()
+            .server_auth()
+            .client_auth()
+            .build()
+            .unwrap(),
+    )
+    .unwrap();
     let san = SubjectAlternativeName::new()
         .dns("localhost")
         .ip("127.0.0.1")
@@ -319,5 +327,41 @@ async fn socks_tls_preserves_metadata() {
         .is_some());
     assert_eq!(response.text().await.unwrap(), "boring");
     tunnel.abort();
+    task.abort();
+}
+
+#[cfg(feature = "__native-tls")]
+#[tokio::test]
+async fn native_backend_identity_formats() {
+    let (cert, key) = certificate();
+    let (addr, task) = server(&cert, &key, true, None).await;
+    let archive = boring::pkcs12::Pkcs12::builder()
+        .build("password", "client", &key, &cert)
+        .unwrap()
+        .to_der()
+        .unwrap();
+    assert!(reqwest::Identity::from_pkcs12_der(&archive, "wrong password").is_err());
+    let identities = [
+        reqwest::Identity::from_pkcs12_der(&archive, "password").unwrap(),
+        reqwest::Identity::from_pkcs8_pem(
+            &cert.to_pem().unwrap(),
+            &key.private_key_to_pem_pkcs8().unwrap(),
+        )
+        .unwrap(),
+    ];
+    for identity in identities {
+        let response = client(&cert)
+            .tls_backend_native()
+            .identity(identity.clone())
+            .build()
+            .unwrap()
+            .get(format!("https://{addr}/"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.text().await.unwrap(), "boring");
+    }
+    // The deprecated selector remains callable with the same backend semantics.
+    assert!(client(&cert).use_native_tls().build().is_ok());
     task.abort();
 }

@@ -50,13 +50,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 The default TLS backend uses `boring` and `tokio-boring`. Building BoringSSL requires a C/C++ compiler, CMake, Perl, and libclang (for bindgen). On Windows, install LLVM and NASM as well. HTTP/3 uses `quiche` with `boringssl-boring-crate`, so it links the same BoringSSL library. Enable it with `features = ["http3"]` and `RUSTFLAGS="--cfg reqwest_unstable"`.
 
+Windows ARM64 builds of BoringSSL 4.x need its portable C implementation. Set `CMAKE_TOOLCHAIN_FILE` to the absolute path of a CMake file containing `set(OPENSSL_NO_ASM ON CACHE BOOL "Use portable BoringSSL" FORCE)`, as in [the CI toolchain file](.github/cmake/windows-arm64.cmake).
+
 The `rustls` and `rustls-no-provider` features and the `tls_backend_rustls()` / `use_rustls_tls()` builder methods remain compatibility aliases for BoringSSL. A Rustls crypto provider is no longer needed. `tls_backend_preconfigured()` / `use_preconfigured_tls()` keep their signatures but accept `boring::ssl::SslConnector` in place of Rustls configuration objects; this backend-specific escape hatch has no upstream semver guarantee. Configure HTTP/3 through the standard builder methods.
 
 Apple platforms use Security.framework to validate system trust; Windows loads the system root store, and other native platforms use system CA files. Custom certificates, PEM client identities, certificate revocation lists, TLS versions, SNI, key logging, and TLS metadata remain available through the existing API.
 
 Browser WASM targets use the browser's TLS implementation.
 
-The optional `native-tls` backend still uses the system TLS framework on Windows and macOS and OpenSSL on Linux. `native-tls-vendored` builds OpenSSL from source.
+The optional `native-tls` backend uses the system TLS framework on Windows and Apple platforms. On Linux and other native targets, `native-tls` features (including `native-tls-vendored`) and the `tls_backend_native()` / `use_native_tls()` methods are compatibility aliases for BoringSSL. This avoids incompatible OpenSSL and BoringSSL symbols in the same process. PKCS#12 and PKCS#8 client identities remain supported. Preconfigured native-tls connectors are supported only on Windows and Apple platforms; use `boring::ssl::SslConnector` elsewhere.
 
 ## Attribution and License
 

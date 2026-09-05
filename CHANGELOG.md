@@ -1,3 +1,9 @@
+## Unreleased
+
+- Use BoringSSL for native-tls compatibility features on platforms that otherwise link OpenSSL; retain system TLS on Windows and Apple targets.
+- Preserve PKCS#12 and PKCS#8 identity APIs for the BoringSSL aliases.
+- Fix CI target selection, Windows libclang setup, and Quiche minimum dependency resolution; run the full matrix after individual failures.
+
 ## v0.13.5 (reqwest-boring)
 
 First release of the reqwest-boring fork, based on upstream reqwest 0.13.4 and

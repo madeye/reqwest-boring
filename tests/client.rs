@@ -353,7 +353,7 @@ async fn overridden_dns_resolution_with_hickory_dns_multiple() {
     assert_eq!("Hello", text);
 }
 
-#[cfg(any(feature = "__native-tls", feature = "__rustls",))]
+#[cfg(any(reqwest_native_tls, feature = "__rustls",))]
 #[test]
 fn use_preconfigured_tls_with_bogus_backend() {
     struct DefinitelyNotTls;
@@ -364,7 +364,7 @@ fn use_preconfigured_tls_with_bogus_backend() {
         .expect_err("definitely is not TLS");
 }
 
-#[cfg(feature = "__native-tls")]
+#[cfg(reqwest_native_tls)]
 #[test]
 fn use_preconfigured_native_tls_default() {
     extern crate native_tls_crate;
@@ -537,7 +537,7 @@ async fn test_tls_info_version_rustls() {
 
 // native-tls cannot report the negotiated version, so it stays `None` even
 // though the rest of the `TlsInfo` is populated.
-#[cfg(feature = "__native-tls")]
+#[cfg(reqwest_native_tls)]
 #[tokio::test]
 async fn test_tls_info_version_native_tls() {
     let resp = reqwest::Client::builder()

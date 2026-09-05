@@ -173,7 +173,9 @@
 //!
 //! On native targets, a `Client` uses BoringSSL through the `boring` and
 //! `tokio-boring` crates by default to connect to HTTPS destinations. The
-//! optional `native-tls` backend remains available. Browser WASM targets use
+//! optional `native-tls` backend uses system TLS on Windows and Apple targets;
+//! on other platforms its features and builder methods are BoringSSL aliases.
+//! Browser WASM targets use
 //! the browser's TLS implementation.
 //!
 //! The `rustls` and `rustls-no-provider` features and the
@@ -213,10 +215,10 @@
 //! - **boring**: Enables TLS functionality provided by BoringSSL.
 //! - **rustls**: Compatibility alias for `boring`.
 //! - **rustls-no-provider**: Compatibility alias for `boring`; no provider installation is needed.
-//! - **native-tls**: Enables TLS functionality provided by `native-tls`.
-//! - **native-tls-vendored**: Enables the `vendored` feature of `native-tls`.
-//! - **native-tls-no-alpn**: Enables `native-tls` without its `alpn` feature.
-//! - **native-tls-vendored-no-alpn**: Enables `native-tls-vendored` without its `alpn` feature.
+//! - **native-tls**: Enables system TLS on Windows and Apple targets; a BoringSSL alias elsewhere.
+//! - **native-tls-vendored**: Compatibility alias for `native-tls`; OpenSSL is not linked.
+//! - **native-tls-no-alpn**: Enables `native-tls` without its `alpn` feature on system TLS targets.
+//! - **native-tls-vendored-no-alpn**: Compatibility alias for `native-tls-no-alpn`.
 //! - **blocking**: Provides the [blocking][] client API.
 //! - **charset** *(enabled by default)*: Improved support for decoding text.
 //! - **cookies**: Provides cookie session support.

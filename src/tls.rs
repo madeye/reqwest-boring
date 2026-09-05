@@ -27,8 +27,11 @@
 //!
 //! ## native-tls
 //!
-//! This backend uses the [native-tls][] crate. That will try to use the system
-//! TLS on Windows and Mac, and OpenSSL on Linux targets.
+//! On Windows and Apple targets, this backend uses the [native-tls][] crate
+//! with the system TLS library. On other platforms, these features and the
+//! native backend builder methods are compatibility aliases for BoringSSL.
+//! This avoids loading OpenSSL and BoringSSL with overlapping symbols.
+//! PKCS#12 and PKCS#8 client identities remain supported on all native targets.
 //!
 //! Enabling the feature explicitly allows for `native-tls`-specific
 //! configuration options.
@@ -41,7 +44,7 @@
 //! rustls feature and builder names are retained for source compatibility.
 //! No Rustls crypto provider is needed. Preconfigured TLS accepts a
 //! `boring::ssl::SslConnector` instead of Rustls configuration objects (or a
-//! native-tls connector when that backend is enabled). HTTP/3 is configured
+//! native-tls connector on Windows and Apple targets). HTTP/3 is configured
 //! through the standard builder methods.
 
 use std::{
@@ -59,7 +62,7 @@ pub struct CertificateRevocationList {
 /// Represents a server X509 certificate.
 #[derive(Clone)]
 pub struct Certificate {
-    #[cfg(feature = "__native-tls")]
+    #[cfg(reqwest_native_tls)]
     native: native_tls_crate::Certificate,
     #[cfg(feature = "__rustls")]
     original: Cert,
@@ -75,17 +78,14 @@ enum Cert {
 /// Represents a private key and X509 cert as a client certificate.
 #[derive(Clone)]
 pub struct Identity {
-    #[cfg_attr(
-        not(any(feature = "__native-tls", feature = "__rustls")),
-        allow(unused)
-    )]
+    #[cfg_attr(not(any(reqwest_native_tls, feature = "__rustls")), allow(unused))]
     inner: ClientCert,
 }
 
 enum ClientCert {
-    #[cfg(feature = "__native-tls")]
+    #[cfg(reqwest_native_tls)]
     Pkcs12(native_tls_crate::Identity),
-    #[cfg(feature = "__native-tls")]
+    #[cfg(reqwest_native_tls)]
     Pkcs8(native_tls_crate::Identity),
     #[cfg(feature = "__rustls")]
     Pem { key: Vec<u8>, certs: Vec<Vec<u8>> },
@@ -94,9 +94,9 @@ enum ClientCert {
 impl Clone for ClientCert {
     fn clone(&self) -> Self {
         match self {
-            #[cfg(feature = "__native-tls")]
+            #[cfg(reqwest_native_tls)]
             Self::Pkcs8(i) => Self::Pkcs8(i.clone()),
-            #[cfg(feature = "__native-tls")]
+            #[cfg(reqwest_native_tls)]
             Self::Pkcs12(i) => Self::Pkcs12(i.clone()),
             #[cfg(feature = "__rustls")]
             ClientCert::Pem { key, certs } => ClientCert::Pem {
@@ -104,7 +104,7 @@ impl Clone for ClientCert {
                 certs: certs.clone(),
             },
             #[cfg_attr(
-                any(feature = "__native-tls", feature = "__rustls"),
+                any(reqwest_native_tls, feature = "__rustls"),
                 allow(unreachable_patterns)
             )]
             _ => unreachable!(),
@@ -131,7 +131,7 @@ impl Certificate {
     /// ```
     pub fn from_der(der: &[u8]) -> crate::Result<Certificate> {
         Ok(Certificate {
-            #[cfg(feature = "__native-tls")]
+            #[cfg(reqwest_native_tls)]
             native: native_tls_crate::Certificate::from_der(der).map_err(crate::error::builder)?,
             #[cfg(feature = "__rustls")]
             original: Cert::Der(der.to_owned()),
@@ -156,7 +156,7 @@ impl Certificate {
     /// ```
     pub fn from_pem(pem: &[u8]) -> crate::Result<Certificate> {
         Ok(Certificate {
-            #[cfg(feature = "__native-tls")]
+            #[cfg(reqwest_native_tls)]
             native: native_tls_crate::Certificate::from_pem(pem).map_err(crate::error::builder)?,
             #[cfg(feature = "__rustls")]
             original: Cert::Pem(pem.to_owned()),
@@ -189,7 +189,7 @@ impl Certificate {
             .collect::<crate::Result<Vec<Certificate>>>()
     }
 
-    #[cfg(feature = "__native-tls")]
+    #[cfg(reqwest_native_tls)]
     pub(crate) fn add_to_native_tls(self, tls: &mut native_tls_crate::TlsConnectorBuilder) {
         tls.add_root_certificate(self.native);
     }
@@ -270,12 +270,34 @@ impl Identity {
     /// This requires the `native-tls` Cargo feature enabled.
     #[cfg(feature = "__native-tls")]
     pub fn from_pkcs12_der(der: &[u8], password: &str) -> crate::Result<Identity> {
-        Ok(Identity {
-            inner: ClientCert::Pkcs12(
-                native_tls_crate::Identity::from_pkcs12(der, password)
-                    .map_err(crate::error::builder)?,
-            ),
-        })
+        #[cfg(reqwest_native_tls)]
+        {
+            Ok(Identity {
+                inner: ClientCert::Pkcs12(
+                    native_tls_crate::Identity::from_pkcs12(der, password)
+                        .map_err(crate::error::builder)?,
+                ),
+            })
+        }
+        #[cfg(not(reqwest_native_tls))]
+        {
+            let parsed = boring::pkcs12::Pkcs12::from_der(der)
+                .and_then(|archive| archive.parse(password))
+                .map_err(crate::error::builder)?;
+            let key = parsed
+                .pkey
+                .private_key_to_pem_pkcs8()
+                .map_err(crate::error::builder)?;
+            let mut certs = vec![parsed.cert.to_der().map_err(crate::error::builder)?];
+            if let Some(chain) = parsed.chain {
+                for cert in chain {
+                    certs.push(cert.to_der().map_err(crate::error::builder)?);
+                }
+            }
+            Ok(Identity {
+                inner: ClientCert::Pem { key, certs },
+            })
+        }
     }
 
     /// Parses a chain of PEM encoded X509 certificates, with the leaf certificate first.
@@ -304,11 +326,37 @@ impl Identity {
     /// This requires the `native-tls` Cargo feature enabled.
     #[cfg(feature = "__native-tls")]
     pub fn from_pkcs8_pem(pem: &[u8], key: &[u8]) -> crate::Result<Identity> {
-        Ok(Identity {
-            inner: ClientCert::Pkcs8(
-                native_tls_crate::Identity::from_pkcs8(pem, key).map_err(crate::error::builder)?,
-            ),
-        })
+        #[cfg(reqwest_native_tls)]
+        {
+            Ok(Identity {
+                inner: ClientCert::Pkcs8(
+                    native_tls_crate::Identity::from_pkcs8(pem, key)
+                        .map_err(crate::error::builder)?,
+                ),
+            })
+        }
+        #[cfg(not(reqwest_native_tls))]
+        {
+            let block = pem::parse(key).map_err(crate::error::builder)?;
+            if block.tag() != "PRIVATE KEY" {
+                return Err(crate::error::builder("expected a PKCS#8 private key"));
+            }
+            let key = boring::pkey::PKey::private_key_from_pem(key)
+                .and_then(|key| key.private_key_to_pem_pkcs8())
+                .map_err(crate::error::builder)?;
+            let certs = boring::x509::X509::stack_from_pem(pem)
+                .map_err(crate::error::builder)?
+                .into_iter()
+                .map(|cert| cert.to_der())
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(crate::error::builder)?;
+            if certs.is_empty() {
+                return Err(crate::error::builder("certificate not found"));
+            }
+            Ok(Identity {
+                inner: ClientCert::Pem { key, certs },
+            })
+        }
     }
 
     /// Parses PEM encoded private key and certificate.
@@ -359,7 +407,7 @@ impl Identity {
         })
     }
 
-    #[cfg(feature = "__native-tls")]
+    #[cfg(reqwest_native_tls)]
     pub(crate) fn add_to_native_tls(
         self,
         tls: &mut native_tls_crate::TlsConnectorBuilder,
@@ -400,7 +448,7 @@ impl Identity {
                 tls.set_private_key(&key).map_err(crate::error::builder)?;
                 tls.check_private_key().map_err(crate::error::builder)
             }
-            #[cfg(feature = "__native-tls")]
+            #[cfg(reqwest_native_tls)]
             _ => Err(crate::error::builder("incompatible TLS identity type")),
         }
     }
@@ -541,7 +589,7 @@ impl Version {
     /// Version 1.3 of the TLS protocol.
     pub const TLS_1_3: Version = Version(InnerVersion::Tls1_3);
 
-    #[cfg(feature = "__native-tls")]
+    #[cfg(reqwest_native_tls)]
     pub(crate) fn to_native_tls(self) -> Option<native_tls_crate::Protocol> {
         match self.0 {
             InnerVersion::Tls1_0 => Some(native_tls_crate::Protocol::Tlsv10),
@@ -573,30 +621,30 @@ impl Version {
 pub(crate) enum TlsBackend {
     // This is the default and HTTP/3 feature does not use it so suppress it.
     #[allow(dead_code)]
-    #[cfg(feature = "__native-tls")]
+    #[cfg(reqwest_native_tls)]
     NativeTls,
-    #[cfg(feature = "__native-tls")]
+    #[cfg(reqwest_native_tls)]
     BuiltNativeTls(native_tls_crate::TlsConnector),
     #[cfg(feature = "__rustls")]
     Boring,
     #[cfg(feature = "__rustls")]
     BuiltBoring(boring::ssl::SslConnector),
-    #[cfg(any(feature = "__native-tls", feature = "__rustls",))]
+    #[cfg(any(reqwest_native_tls, feature = "__rustls",))]
     UnknownPreconfigured,
 }
 
 impl fmt::Debug for TlsBackend {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            #[cfg(feature = "__native-tls")]
+            #[cfg(reqwest_native_tls)]
             TlsBackend::NativeTls => write!(f, "NativeTls"),
-            #[cfg(feature = "__native-tls")]
+            #[cfg(reqwest_native_tls)]
             TlsBackend::BuiltNativeTls(_) => write!(f, "BuiltNativeTls"),
             #[cfg(feature = "__rustls")]
             TlsBackend::Boring => write!(f, "Boring"),
             #[cfg(feature = "__rustls")]
             TlsBackend::BuiltBoring(_) => write!(f, "BuiltBoring"),
-            #[cfg(any(feature = "__native-tls", feature = "__rustls",))]
+            #[cfg(any(reqwest_native_tls, feature = "__rustls",))]
             TlsBackend::UnknownPreconfigured => write!(f, "UnknownPreconfigured"),
         }
     }
@@ -605,15 +653,12 @@ impl fmt::Debug for TlsBackend {
 #[allow(clippy::derivable_impls)]
 impl Default for TlsBackend {
     fn default() -> TlsBackend {
-        #[cfg(any(
-            all(feature = "__rustls", not(feature = "__native-tls")),
-            feature = "http3"
-        ))]
+        #[cfg(any(all(feature = "__rustls", not(reqwest_native_tls)), feature = "http3"))]
         {
             TlsBackend::Boring
         }
 
-        #[cfg(all(feature = "__native-tls", not(feature = "http3")))]
+        #[cfg(all(reqwest_native_tls, not(feature = "http3")))]
         {
             TlsBackend::NativeTls
         }
@@ -636,8 +681,8 @@ impl TlsInfo {
 
     /// Get the TLS protocol version negotiated with the peer.
     ///
-    /// Returns `None` if the TLS backend cannot report it. The `native-tls`
-    /// backend never reports a version.
+    /// Returns `None` if the TLS backend cannot report it. The system TLS
+    /// backends on Windows and Apple targets do not report a version.
     pub fn version(&self) -> Option<Version> {
         self.version
     }
@@ -655,13 +700,13 @@ impl std::fmt::Debug for TlsInfo {
 mod tests {
     use super::*;
 
-    #[cfg(feature = "__native-tls")]
+    #[cfg(reqwest_native_tls)]
     #[test]
     fn certificate_from_der_invalid() {
         Certificate::from_der(b"not der").unwrap_err();
     }
 
-    #[cfg(feature = "__native-tls")]
+    #[cfg(reqwest_native_tls)]
     #[test]
     fn certificate_from_pem_invalid() {
         Certificate::from_pem(b"not pem").unwrap_err();

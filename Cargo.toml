@@ -16,6 +16,7 @@ include = [
     "/README.md",
     "/CHANGELOG.md",
     "/Cargo.toml",
+    "/build.rs",
     "/LICENSE-APACHE",
     "/LICENSE-MIT",
     "src/**/*.rs"
@@ -97,7 +98,7 @@ __rustls = ["dep:boring", "dep:boring-sys", "dep:foreign-types", "dep:tokio-bori
 __rustls-aws-lc-rs = ["__rustls"]
 
 # Enables common native-tls code.
-__native-tls = ["dep:hyper-tls", "dep:native-tls-crate", "__tls", "dep:tokio-native-tls"]
+__native-tls = ["dep:hyper-tls", "dep:native-tls-crate", "__tls", "dep:tokio-native-tls", "boring"]
 __native-tls-alpn = ["native-tls-crate?/alpn", "hyper-tls?/alpn"]
 
 [dependencies]
@@ -138,11 +139,6 @@ pin-project-lite = "0.2.11"
 pem = { version = "3", optional = true }
 mime = { version = "0.3.16", optional = true }
 
-# native-tls
-hyper-tls = { version = "0.6", optional = true }
-native-tls-crate = { version = "0.2.16", optional = true, package = "native-tls" }
-tokio-native-tls = { version = "0.3.0", optional = true }
-
 # BoringSSL is shared by TCP TLS and Quiche.
 boring = { version = "4.22", optional = true }
 boring-sys = { version = "4.22", optional = true }
@@ -166,6 +162,13 @@ futures-channel = { version = "0.3", optional = true }
 
 [target.'cfg(not(any(target_vendor = "apple", windows, all(target_arch = "wasm32", any(target_os = "unknown", target_os = "none")))))'.dependencies]
 openssl-probe = { version = "0.2", optional = true }
+
+# Only platform TLS backends can coexist with BoringSSL. Other platforms use
+# BoringSSL for the native-tls compatibility features as well.
+[target.'cfg(any(target_vendor = "apple", windows))'.dependencies]
+hyper-tls = { version = "0.6", optional = true }
+native-tls-crate = { version = "0.2.16", optional = true, package = "native-tls" }
+tokio-native-tls = { version = "0.3.0", optional = true }
 
 [target.'cfg(target_vendor = "apple")'.dependencies]
 security-framework = { version = "3", optional = true }
@@ -225,7 +228,7 @@ num_cpus = "1.0"
 libc = "0"
 
 [lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = ['cfg(reqwest_unstable)'] }
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(reqwest_unstable)', 'cfg(reqwest_native_tls)'] }
 
 [[example]]
 name = "blocking"
