@@ -3,6 +3,7 @@
 pub(crate) mod connect;
 pub(crate) mod dns;
 mod pool;
+pub(crate) mod transport;
 
 use crate::async_impl::body::ResponseBody;
 use crate::async_impl::h3_client::pool::{Key, Pool, PoolClient};
@@ -103,8 +104,10 @@ impl Service<Request<Body>> for H3Client {
     }
 }
 
+type ResponseFuture = Pin<Box<dyn Future<Output = Result<Response<ResponseBody>, Error>> + Send>>;
+
 pub(crate) struct H3ResponseFuture {
-    inner: SyncWrapper<Pin<Box<dyn Future<Output = Result<Response<ResponseBody>, Error>> + Send>>>,
+    inner: SyncWrapper<ResponseFuture>,
 }
 
 impl Future for H3ResponseFuture {

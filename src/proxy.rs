@@ -80,6 +80,7 @@ pub(crate) struct Matcher {
     maybe_has_http_custom_headers: bool,
 }
 
+#[allow(clippy::large_enum_variant)]
 enum Matcher_ {
     Util(matcher::Matcher),
     Custom(Custom),
@@ -454,7 +455,7 @@ impl Proxy {
 
 fn cache_maybe_has_http_auth(url: &Url, extra: &Option<HeaderValue>) -> bool {
     (url.scheme() == "http" || url.scheme() == "https")
-        && (url.username().len() > 0 || url.password().is_some() || extra.is_some())
+        && (!url.username().is_empty() || url.password().is_some() || extra.is_some())
 }
 
 fn cache_maybe_has_http_custom_headers(url: &Url, extra: &Option<HeaderMap>) -> bool {
@@ -769,9 +770,11 @@ fn url_auth(url: &mut Url, username: &str, password: &str) {
     url.set_password(Some(password)).expect("is a base");
 }
 
+type CustomProxyFn = dyn Fn(&Url) -> Option<crate::Result<Url>> + Send + Sync + 'static;
+
 #[derive(Clone)]
 struct Custom {
-    func: Arc<dyn Fn(&Url) -> Option<crate::Result<Url>> + Send + Sync + 'static>,
+    func: Arc<CustomProxyFn>,
     no_proxy: Option<NoProxy>,
 }
 

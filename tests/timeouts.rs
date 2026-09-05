@@ -1,5 +1,4 @@
 #![cfg(not(target_arch = "wasm32"))]
-#![cfg(not(feature = "rustls-no-provider"))]
 mod support;
 use support::server;
 
@@ -362,6 +361,7 @@ fn connect_timeout_blocking_request() {
     let _ = env_logger::try_init();
 
     let client = reqwest::blocking::Client::builder()
+        .no_proxy()
         .connect_timeout(Duration::from_millis(100))
         .build()
         .unwrap();

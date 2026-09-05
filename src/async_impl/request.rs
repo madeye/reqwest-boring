@@ -3,11 +3,6 @@ use std::fmt;
 use std::future::Future;
 use std::time::Duration;
 
-#[cfg(any(feature = "query", feature = "form", feature = "json"))]
-use serde::Serialize;
-#[cfg(feature = "json")]
-use serde_json;
-
 use super::body::Body;
 use super::client::{Client, Pending};
 #[cfg(feature = "multipart")]
@@ -21,6 +16,8 @@ use crate::header::CONTENT_TYPE;
 use crate::header::{HeaderMap, HeaderName, HeaderValue};
 use crate::{Method, Url};
 use http::{request::Parts, Extensions, Request as HttpRequest, Version};
+#[cfg(any(feature = "query", feature = "form", feature = "json"))]
+use serde::Serialize;
 
 /// A request which can be executed with `Client::execute()`.
 pub struct Request {
@@ -666,7 +663,6 @@ impl TryFrom<Request> for HttpRequest<Body> {
 
 #[cfg(test)]
 mod tests {
-    #![cfg(not(feature = "rustls-no-provider"))]
 
     use super::*;
     #[cfg(feature = "query")]

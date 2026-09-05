@@ -220,7 +220,7 @@ impl Error {
 
     #[allow(unused)]
     pub(crate) fn into_io(self) -> io::Error {
-        io::Error::new(io::ErrorKind::Other, self)
+        io::Error::other(self)
     }
 }
 
@@ -497,7 +497,7 @@ mod tests {
 
     #[test]
     fn from_unknown_io_error() {
-        let orig = io::Error::new(io::ErrorKind::Other, "orly");
+        let orig = io::Error::other("orly");
         let err = super::decode_io(orig);
         match err.inner.kind {
             Kind::Decode => (),
@@ -516,7 +516,7 @@ mod tests {
 
     #[test]
     fn decode_wraps_other_errors() {
-        let io = io::Error::new(io::ErrorKind::Other, "boom");
+        let io = io::Error::other("boom");
         let err = super::decode(io);
         assert!(err.is_decode());
         assert!(!err.is_timeout());

@@ -5,16 +5,14 @@
 //!
 //! # Backends
 //!
-//! reqwest supports several TLS backends, enabled with Cargo features.
+//! `reqwest-boring` is a fork of reqwest with BoringSSL as its default TLS
+//! layer. An optional system-native backend is also available through Cargo
+//! features.
 //!
 //! ## default-tls
 //!
-//! reqwest will pick a TLS backend by default. This is true when the
-//! `default-tls` feature is enabled.
-//!
-//! While it currently uses `rustls`, the feature set is designed to only
-//! enable configuration that is shared among available backends. This allows
-//! reqwest to change the default to `native-tls` (or another) by configuration.
+//! The `default-tls` feature enables BoringSSL through the `boring` and
+//! `tokio-boring` crates. HTTP/3 uses Quiche with the same BoringSSL build.
 //!
 //! <div class="warning">This feature is enabled by default, and takes
 //! precedence if any other crate enables it. This is true even if you declare
@@ -37,44 +35,15 @@
 //!
 //! [native-tls]: https://crates.io/crates/native-tls
 //!
-//! ## rustls
+//! ## boring, rustls, rustls-no-provider
 //!
-//! This backend uses the [rustls][] crate, a TLS library written in Rust.
-//!
-//! [rustls]: https://crates.io/crates/rustls
-//!
-//! ## rustls-no-provider
-//!
-//! Like `rustls`, but without a built-in crypto provider. This is useful when
-//! you want to supply your own [rustls CryptoProvider][], for example to use
-//! [ring][] instead of the default `aws-lc-rs`.
-//!
-//! **You must install a crypto provider before building a `Client`.** If none
-//! is installed the client will panic at construction time. Install one via
-//! [`CryptoProvider::install_default`][]:
-//!
-//! ```rust,ignore
-//! rustls::crypto::ring::default_provider()
-//!     .install_default()
-//!     .expect("Failed to install rustls crypto provider");
-//!
-//! let client = reqwest::Client::new();
-//! ```
-//!
-//! [rustls CryptoProvider]: https://docs.rs/rustls/latest/rustls/crypto/struct.CryptoProvider.html
-//! [ring]: https://crates.io/crates/ring
-//! [`CryptoProvider::install_default`]: https://docs.rs/rustls/latest/rustls/crypto/struct.CryptoProvider.html#method.install_default
+//! These features select BoringSSL through the `boring` crate. The legacy
+//! rustls feature and builder names are retained for source compatibility.
+//! No Rustls crypto provider is needed. Preconfigured TLS accepts a
+//! `boring::ssl::SslConnector` instead of Rustls configuration objects (or a
+//! native-tls connector when that backend is enabled). HTTP/3 is configured
+//! through the standard builder methods.
 
-#[cfg(feature = "__rustls")]
-use rustls::{
-    client::danger::HandshakeSignatureValid, client::danger::ServerCertVerified,
-    client::danger::ServerCertVerifier, crypto::WebPkiSupportedAlgorithms,
-    server::ParsedCertificate, DigitallySignedStruct, Error as TLSError, RootCertStore,
-    SignatureScheme,
-};
-use rustls_pki_types::pem::PemObject;
-#[cfg(feature = "__rustls")]
-use rustls_pki_types::{ServerName, UnixTime};
 use std::{
     fmt,
     io::{BufRead, BufReader},
@@ -84,7 +53,7 @@ use std::{
 #[cfg(feature = "__rustls")]
 pub struct CertificateRevocationList {
     #[cfg(feature = "__rustls")]
-    inner: rustls_pki_types::CertificateRevocationListDer<'static>,
+    inner: Vec<u8>,
 }
 
 /// Represents a server X509 certificate.
@@ -119,10 +88,7 @@ enum ClientCert {
     #[cfg(feature = "__native-tls")]
     Pkcs8(native_tls_crate::Identity),
     #[cfg(feature = "__rustls")]
-    Pem {
-        key: rustls_pki_types::PrivateKeyDer<'static>,
-        certs: Vec<rustls_pki_types::CertificateDer<'static>>,
-    },
+    Pem { key: Vec<u8>, certs: Vec<Vec<u8>> },
 }
 
 impl Clone for ClientCert {
@@ -134,7 +100,7 @@ impl Clone for ClientCert {
             Self::Pkcs12(i) => Self::Pkcs12(i.clone()),
             #[cfg(feature = "__rustls")]
             ClientCert::Pem { key, certs } => ClientCert::Pem {
-                key: key.clone_key(),
+                key: key.clone(),
                 certs: certs.clone(),
             },
             #[cfg_attr(
@@ -223,49 +189,50 @@ impl Certificate {
             .collect::<crate::Result<Vec<Certificate>>>()
     }
 
-    /*
-    #[cfg(feature = "rustls")]
-    pub fn from_trust_anchor() -> Self {
-
-    }
-    */
-
     #[cfg(feature = "__native-tls")]
     pub(crate) fn add_to_native_tls(self, tls: &mut native_tls_crate::TlsConnectorBuilder) {
         tls.add_root_certificate(self.native);
     }
 
-    #[cfg(feature = "__rustls")]
-    pub(crate) fn add_to_rustls(
-        self,
-        root_cert_store: &mut rustls::RootCertStore,
-    ) -> crate::Result<()> {
-        use std::io::Cursor;
+    #[cfg(all(feature = "__rustls", target_vendor = "apple"))]
+    pub(crate) fn ders(&self) -> crate::Result<Vec<Vec<u8>>> {
+        match &self.original {
+            Cert::Der(der) => Ok(vec![der.clone()]),
+            Cert::Pem(pem) => Self::read_pem_certs(&mut &pem[..]),
+        }
+    }
 
-        match self.original {
-            Cert::Der(buf) => root_cert_store
-                .add(buf.into())
-                .map_err(crate::error::builder)?,
-            Cert::Pem(buf) => {
-                let mut reader = Cursor::new(buf);
-                let certs = Self::read_pem_certs(&mut reader)?;
-                for c in certs {
-                    root_cert_store
-                        .add(c.into())
-                        .map_err(crate::error::builder)?;
-                }
-            }
+    #[cfg(feature = "__rustls")]
+    pub(crate) fn add_to_boring(
+        self,
+        store: &mut boring::x509::store::X509StoreBuilder,
+    ) -> crate::Result<()> {
+        let certs = match self.original {
+            Cert::Der(der) => vec![der],
+            Cert::Pem(pem) => Self::read_pem_certs(&mut &pem[..])?,
+        };
+        if certs.is_empty() {
+            return Err(crate::error::builder("no certificates found"));
+        }
+        for der in certs {
+            store
+                .add_cert(boring::x509::X509::from_der(&der).map_err(crate::error::builder)?)
+                .map_err(crate::error::builder)?;
         }
         Ok(())
     }
 
     fn read_pem_certs(reader: &mut impl BufRead) -> crate::Result<Vec<Vec<u8>>> {
-        rustls_pki_types::CertificateDer::pem_reader_iter(reader)
-            .map(|result| match result {
-                Ok(cert) => Ok(cert.as_ref().to_vec()),
-                Err(_) => Err(crate::error::builder("invalid certificate encoding")),
-            })
-            .collect()
+        let mut buf = Vec::new();
+        reader
+            .read_to_end(&mut buf)
+            .map_err(crate::error::builder)?;
+        Ok(pem::parse_many(buf)
+            .map_err(crate::error::builder)?
+            .into_iter()
+            .filter(|p| p.tag() == "CERTIFICATE")
+            .map(|p| p.into_contents())
+            .collect())
     }
 }
 
@@ -368,46 +335,25 @@ impl Identity {
     ///
     /// # Optional
     ///
-    /// This requires the `rustls(-...)` Cargo feature enabled.
+    /// This requires the `boring` (or its legacy `rustls` aliases) Cargo feature enabled.
     #[cfg(feature = "__rustls")]
     pub fn from_pem(buf: &[u8]) -> crate::Result<Identity> {
-        use rustls_pki_types::{pem::SectionKind, PrivateKeyDer};
-        use std::io::Cursor;
-
-        let (key, certs) = {
-            let mut pem = Cursor::new(buf);
-            let mut sk = Vec::<rustls_pki_types::PrivateKeyDer>::new();
-            let mut certs = Vec::<rustls_pki_types::CertificateDer>::new();
-
-            while let Some((kind, data)) =
-                rustls_pki_types::pem::from_buf(&mut pem).map_err(|_| {
-                    crate::error::builder(TLSError::General(String::from(
-                        "Invalid identity PEM file",
-                    )))
-                })?
-            {
-                match kind {
-                    SectionKind::Certificate => certs.push(data.into()),
-                    SectionKind::PrivateKey => sk.push(PrivateKeyDer::Pkcs8(data.into())),
-                    SectionKind::RsaPrivateKey => sk.push(PrivateKeyDer::Pkcs1(data.into())),
-                    SectionKind::EcPrivateKey => sk.push(PrivateKeyDer::Sec1(data.into())),
-                    _ => {
-                        return Err(crate::error::builder(TLSError::General(String::from(
-                            "No valid certificate was found",
-                        ))))
-                    }
+        let blocks = pem::parse_many(buf).map_err(crate::error::builder)?;
+        let mut certs = Vec::new();
+        let mut key = None;
+        for block in blocks {
+            match block.tag() {
+                "CERTIFICATE" => certs.push(block.into_contents()),
+                "PRIVATE KEY" | "RSA PRIVATE KEY" | "EC PRIVATE KEY" => {
+                    key = Some(pem::encode(&block).into_bytes())
                 }
+                _ => return Err(crate::error::builder("invalid identity PEM section")),
             }
-
-            if let (Some(sk), false) = (sk.pop(), certs.is_empty()) {
-                (sk, certs)
-            } else {
-                return Err(crate::error::builder(TLSError::General(String::from(
-                    "private key or certificate not found",
-                ))));
-            }
-        };
-
+        }
+        let key = key.ok_or_else(|| crate::error::builder("private key not found"))?;
+        if certs.is_empty() {
+            return Err(crate::error::builder("certificate not found"));
+        }
         Ok(Identity {
             inner: ClientCert::Pem { key, certs },
         })
@@ -429,22 +375,33 @@ impl Identity {
     }
 
     #[cfg(feature = "__rustls")]
-    pub(crate) fn add_to_rustls(
+    pub(crate) fn add_to_boring(
         self,
-        config_builder: rustls::ConfigBuilder<
-            rustls::ClientConfig,
-            // Not sure here
-            rustls::client::WantsClientCert,
-        >,
-    ) -> crate::Result<rustls::ClientConfig> {
+        tls: &mut boring::ssl::SslContextBuilder,
+    ) -> crate::Result<()> {
         match self.inner {
-            ClientCert::Pem { key, certs } => config_builder
-                .with_client_auth_cert(certs, key)
-                .map_err(crate::error::builder),
-            #[cfg(feature = "__native-tls")]
-            ClientCert::Pkcs12(..) | ClientCert::Pkcs8(..) => {
-                Err(crate::error::builder("incompatible TLS identity type"))
+            ClientCert::Pem { key, certs } => {
+                let mut certs = certs.into_iter();
+                let cert = boring::x509::X509::from_der(
+                    &certs
+                        .next()
+                        .ok_or_else(|| crate::error::builder("certificate not found"))?,
+                )
+                .map_err(crate::error::builder)?;
+                tls.set_certificate(&cert).map_err(crate::error::builder)?;
+                for cert in certs {
+                    tls.add_extra_chain_cert(
+                        boring::x509::X509::from_der(&cert).map_err(crate::error::builder)?,
+                    )
+                    .map_err(crate::error::builder)?;
+                }
+                let key = boring::pkey::PKey::private_key_from_pem(&key)
+                    .map_err(crate::error::builder)?;
+                tls.set_private_key(&key).map_err(crate::error::builder)?;
+                tls.check_private_key().map_err(crate::error::builder)
             }
+            #[cfg(feature = "__native-tls")]
+            _ => Err(crate::error::builder("incompatible TLS identity type")),
         }
     }
 }
@@ -470,13 +427,15 @@ impl CertificateRevocationList {
     ///
     /// # Optional
     ///
-    /// This requires the `rustls(-...)` Cargo feature enabled.
+    /// This requires the `boring` (or its legacy `rustls` aliases) Cargo feature enabled.
     #[cfg(feature = "__rustls")]
     pub fn from_pem(pem: &[u8]) -> crate::Result<CertificateRevocationList> {
+        let block = pem::parse(pem).map_err(crate::error::builder)?;
+        if block.tag() != "X509 CRL" {
+            return Err(crate::error::builder("invalid crl encoding"));
+        }
         Ok(CertificateRevocationList {
-            #[cfg(feature = "__rustls")]
-            inner: rustls_pki_types::CertificateRevocationListDer::from_pem_slice(pem)
-                .map_err(|_| crate::error::builder("invalid crl encoding"))?,
+            inner: block.into_contents(),
         })
     }
 
@@ -500,20 +459,41 @@ impl CertificateRevocationList {
     ///
     /// # Optional
     ///
-    /// This requires the `rustls(-...)` Cargo feature enabled.
+    /// This requires the `boring` (or its legacy `rustls` aliases) Cargo feature enabled.
     #[cfg(feature = "__rustls")]
     pub fn from_pem_bundle(pem_bundle: &[u8]) -> crate::Result<Vec<CertificateRevocationList>> {
-        rustls_pki_types::CertificateRevocationListDer::pem_slice_iter(pem_bundle)
-            .map(|result| match result {
-                Ok(crl) => Ok(CertificateRevocationList { inner: crl }),
-                Err(_) => Err(crate::error::builder("invalid crl encoding")),
+        Ok(pem::parse_many(pem_bundle)
+            .map_err(crate::error::builder)?
+            .into_iter()
+            .filter(|p| p.tag() == "X509 CRL")
+            .map(|p| CertificateRevocationList {
+                inner: p.into_contents(),
             })
-            .collect::<crate::Result<Vec<CertificateRevocationList>>>()
+            .collect())
     }
 
-    #[cfg(feature = "__rustls")]
-    pub(crate) fn as_rustls_crl<'a>(&self) -> rustls_pki_types::CertificateRevocationListDer<'a> {
-        self.inner.clone()
+    pub(crate) fn add_to_boring(
+        &self,
+        store: &mut boring::x509::store::X509StoreBuilder,
+    ) -> crate::Result<()> {
+        use foreign_types::ForeignType;
+        let mut input = self.inner.as_ptr();
+        let len = self.inner.len().try_into().map_err(crate::error::builder)?;
+        // SAFETY: DER input is valid for `len` bytes. The returned owned CRL is
+        // freed after the store takes its own reference, including on failure.
+        let ok = unsafe {
+            let crl = boring_sys::d2i_X509_CRL(std::ptr::null_mut(), &mut input, len);
+            if crl.is_null() {
+                return Err(crate::error::builder(boring::error::ErrorStack::get()));
+            }
+            let ok = boring_sys::X509_STORE_add_crl(store.as_ptr(), crl);
+            boring_sys::X509_CRL_free(crl);
+            ok
+        };
+        if ok != 1 {
+            return Err(crate::error::builder(boring::error::ErrorStack::get()));
+        }
+        Ok(())
     }
 }
 
@@ -572,16 +552,21 @@ impl Version {
     }
 
     #[cfg(feature = "__rustls")]
-    pub(crate) fn from_rustls(version: rustls::ProtocolVersion) -> Option<Self> {
-        match version {
-            rustls::ProtocolVersion::SSLv2 => None,
-            rustls::ProtocolVersion::SSLv3 => None,
-            rustls::ProtocolVersion::TLSv1_0 => Some(Self(InnerVersion::Tls1_0)),
-            rustls::ProtocolVersion::TLSv1_1 => Some(Self(InnerVersion::Tls1_1)),
-            rustls::ProtocolVersion::TLSv1_2 => Some(Self(InnerVersion::Tls1_2)),
-            rustls::ProtocolVersion::TLSv1_3 => Some(Self(InnerVersion::Tls1_3)),
-            _ => None,
+    pub(crate) fn to_boring(self) -> boring::ssl::SslVersion {
+        use boring::ssl::SslVersion;
+        match self.0 {
+            InnerVersion::Tls1_0 => SslVersion::TLS1,
+            InnerVersion::Tls1_1 => SslVersion::TLS1_1,
+            InnerVersion::Tls1_2 => SslVersion::TLS1_2,
+            InnerVersion::Tls1_3 => SslVersion::TLS1_3,
         }
+    }
+
+    #[cfg(feature = "__rustls")]
+    pub(crate) fn from_boring(version: boring::ssl::SslVersion) -> Option<Self> {
+        [Self::TLS_1_0, Self::TLS_1_1, Self::TLS_1_2, Self::TLS_1_3]
+            .into_iter()
+            .find(|v| v.to_boring() == version)
     }
 }
 
@@ -593,9 +578,9 @@ pub(crate) enum TlsBackend {
     #[cfg(feature = "__native-tls")]
     BuiltNativeTls(native_tls_crate::TlsConnector),
     #[cfg(feature = "__rustls")]
-    Rustls,
+    Boring,
     #[cfg(feature = "__rustls")]
-    BuiltRustls(rustls::ClientConfig),
+    BuiltBoring(boring::ssl::SslConnector),
     #[cfg(any(feature = "__native-tls", feature = "__rustls",))]
     UnknownPreconfigured,
 }
@@ -608,9 +593,9 @@ impl fmt::Debug for TlsBackend {
             #[cfg(feature = "__native-tls")]
             TlsBackend::BuiltNativeTls(_) => write!(f, "BuiltNativeTls"),
             #[cfg(feature = "__rustls")]
-            TlsBackend::Rustls => write!(f, "Rustls"),
+            TlsBackend::Boring => write!(f, "Boring"),
             #[cfg(feature = "__rustls")]
-            TlsBackend::BuiltRustls(_) => write!(f, "BuiltRustls"),
+            TlsBackend::BuiltBoring(_) => write!(f, "BuiltBoring"),
             #[cfg(any(feature = "__native-tls", feature = "__rustls",))]
             TlsBackend::UnknownPreconfigured => write!(f, "UnknownPreconfigured"),
         }
@@ -625,162 +610,13 @@ impl Default for TlsBackend {
             feature = "http3"
         ))]
         {
-            TlsBackend::Rustls
+            TlsBackend::Boring
         }
 
         #[cfg(all(feature = "__native-tls", not(feature = "http3")))]
         {
             TlsBackend::NativeTls
         }
-    }
-}
-
-#[cfg(feature = "__rustls")]
-pub(crate) fn rustls_store(certs: Vec<Certificate>) -> crate::Result<RootCertStore> {
-    let mut root_cert_store = rustls::RootCertStore::empty();
-    for cert in certs {
-        cert.add_to_rustls(&mut root_cert_store)?;
-    }
-    Ok(root_cert_store)
-}
-
-#[cfg(feature = "__rustls")]
-#[cfg(any(all(unix, not(target_os = "android")), target_os = "windows"))]
-pub(crate) fn rustls_der(
-    certs: Vec<Certificate>,
-) -> crate::Result<Vec<rustls_pki_types::CertificateDer<'static>>> {
-    let mut ders = Vec::with_capacity(certs.len());
-    for cert in certs {
-        match cert.original {
-            Cert::Der(buf) => ders.push(buf.into()),
-            Cert::Pem(buf) => {
-                let mut reader = std::io::Cursor::new(buf);
-                let pems = Certificate::read_pem_certs(&mut reader)?;
-                for c in pems {
-                    ders.push(c.into());
-                }
-            }
-        }
-    }
-    Ok(ders)
-}
-
-#[cfg(feature = "__rustls")]
-#[derive(Debug)]
-pub(crate) struct NoVerifier;
-
-#[cfg(feature = "__rustls")]
-impl ServerCertVerifier for NoVerifier {
-    fn verify_server_cert(
-        &self,
-        _end_entity: &rustls_pki_types::CertificateDer,
-        _intermediates: &[rustls_pki_types::CertificateDer],
-        _server_name: &ServerName,
-        _ocsp_response: &[u8],
-        _now: UnixTime,
-    ) -> Result<ServerCertVerified, TLSError> {
-        Ok(ServerCertVerified::assertion())
-    }
-
-    fn verify_tls12_signature(
-        &self,
-        _message: &[u8],
-        _cert: &rustls_pki_types::CertificateDer,
-        _dss: &DigitallySignedStruct,
-    ) -> Result<HandshakeSignatureValid, TLSError> {
-        Ok(HandshakeSignatureValid::assertion())
-    }
-
-    fn verify_tls13_signature(
-        &self,
-        _message: &[u8],
-        _cert: &rustls_pki_types::CertificateDer,
-        _dss: &DigitallySignedStruct,
-    ) -> Result<HandshakeSignatureValid, TLSError> {
-        Ok(HandshakeSignatureValid::assertion())
-    }
-
-    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
-        vec![
-            SignatureScheme::RSA_PKCS1_SHA1,
-            SignatureScheme::ECDSA_SHA1_Legacy,
-            SignatureScheme::RSA_PKCS1_SHA256,
-            SignatureScheme::ECDSA_NISTP256_SHA256,
-            SignatureScheme::RSA_PKCS1_SHA384,
-            SignatureScheme::ECDSA_NISTP384_SHA384,
-            SignatureScheme::RSA_PKCS1_SHA512,
-            SignatureScheme::ECDSA_NISTP521_SHA512,
-            SignatureScheme::RSA_PSS_SHA256,
-            SignatureScheme::RSA_PSS_SHA384,
-            SignatureScheme::RSA_PSS_SHA512,
-            SignatureScheme::ED25519,
-            SignatureScheme::ED448,
-        ]
-    }
-}
-
-#[cfg(feature = "__rustls")]
-#[derive(Debug)]
-pub(crate) struct IgnoreHostname {
-    roots: RootCertStore,
-    signature_algorithms: WebPkiSupportedAlgorithms,
-}
-
-#[cfg(feature = "__rustls")]
-impl IgnoreHostname {
-    pub(crate) fn new(
-        roots: RootCertStore,
-        signature_algorithms: WebPkiSupportedAlgorithms,
-    ) -> Self {
-        Self {
-            roots,
-            signature_algorithms,
-        }
-    }
-}
-
-#[cfg(feature = "__rustls")]
-impl ServerCertVerifier for IgnoreHostname {
-    fn verify_server_cert(
-        &self,
-        end_entity: &rustls_pki_types::CertificateDer<'_>,
-        intermediates: &[rustls_pki_types::CertificateDer<'_>],
-        _server_name: &ServerName<'_>,
-        _ocsp_response: &[u8],
-        now: UnixTime,
-    ) -> Result<ServerCertVerified, TLSError> {
-        let cert = ParsedCertificate::try_from(end_entity)?;
-
-        rustls::client::verify_server_cert_signed_by_trust_anchor(
-            &cert,
-            &self.roots,
-            intermediates,
-            now,
-            self.signature_algorithms.all,
-        )?;
-        Ok(ServerCertVerified::assertion())
-    }
-
-    fn verify_tls12_signature(
-        &self,
-        message: &[u8],
-        cert: &rustls_pki_types::CertificateDer<'_>,
-        dss: &DigitallySignedStruct,
-    ) -> Result<HandshakeSignatureValid, TLSError> {
-        rustls::crypto::verify_tls12_signature(message, cert, dss, &self.signature_algorithms)
-    }
-
-    fn verify_tls13_signature(
-        &self,
-        message: &[u8],
-        cert: &rustls_pki_types::CertificateDer<'_>,
-        dss: &DigitallySignedStruct,
-    ) -> Result<HandshakeSignatureValid, TLSError> {
-        rustls::crypto::verify_tls13_signature(message, cert, dss, &self.signature_algorithms)
-    }
-
-    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
-        self.signature_algorithms.supported_schemes()
     }
 }
 

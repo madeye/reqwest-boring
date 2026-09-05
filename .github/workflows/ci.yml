@@ -56,9 +56,6 @@ jobs:
 
     runs-on: ${{ matrix.os || 'ubuntu-latest' }}
 
-    env:
-      AWS_LC_SYS_PREBUILT_NASM: ${{ matrix.aws_lc_sys_prebuilt_nasm || 0 }}
-
     # The build matrix does not yet support 'allow failures' at job level.
     # See `jobs.nightly` for the active nightly job definition.
     strategy:
@@ -75,6 +72,7 @@ jobs:
           - windows / stable-x86_64-gnu
           - windows / stable-i686-gnu
           - "feat.: default-tls disabled"
+          - "feat.: boring"
           - "feat.: rustls"
           - "feat.: rustls-no-provider"
           - "feat.: native-tls"
@@ -111,17 +109,14 @@ jobs:
             os: windows-latest
             target: x86_64-pc-windows-msvc
             features: "--features blocking,gzip,brotli,zstd,deflate,query,form,json,multipart,stream"
-            aws_lc_sys_prebuilt_nasm: 1
           - name: windows / stable-i686-msvc
             os: windows-latest
             target: i686-pc-windows-msvc
             features: "--features blocking,gzip,brotli,zstd,deflate,query,form,json,multipart,stream"
-            aws_lc_sys_prebuilt_nasm: 1
           - name: windows / stable-aarch64-msvc
             os: windows-11-arm
             target: aarch64-pc-windows-msvc
             features: "--features blocking,gzip,brotli,zstd,deflate,query,form,json,multipart,stream"
-            aws_lc_sys_prebuilt_nasm: 1
           - name: windows / stable-x86_64-gnu
             os: windows-latest
             rust: stable-x86_64-pc-windows-gnu
@@ -129,7 +124,6 @@ jobs:
             features: "--features blocking,gzip,brotli,zstd,deflate,query,form,json,multipart,stream"
             package_name: mingw-w64-x86_64-gcc
             mingw64_path: "C:\\msys64\\mingw64\\bin"
-            aws_lc_sys_prebuilt_nasm: 1
           - name: windows / stable-i686-gnu
             os: windows-latest
             rust: stable-i686-pc-windows-gnu
@@ -140,6 +134,8 @@ jobs:
 
           - name: "feat.: default-tls disabled"
             features: "--no-default-features"
+          - name: "feat.: boring"
+            features: "--no-default-features --features boring"
           - name: "feat.: rustls"
             features: "--no-default-features --features rustls"
           - name: "feat.: rustls-no-provider"
@@ -212,6 +208,19 @@ jobs:
         if: matrix.package_name
         run: pacman.exe -Sy --noconfirm ${{ matrix.package_name }}
 
+      - name: Install BoringSSL build prerequisites (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y cmake clang libclang-dev ninja-build
+
+      - name: Install NASM (Windows)
+        if: runner.os == 'Windows' && !matrix.mingw64_path
+        run: choco install nasm --yes --no-progress
+
+      - name: Configure libclang (Windows MSVC)
+        if: runner.os == 'Windows' && !matrix.mingw64_path
+        shell: pwsh
+        run: '"LIBCLANG_PATH=C:\Program Files\LLVM\bin" >> $env:GITHUB_ENV'
+
       - name: Create Cargo.lock
         run: cargo update
 
@@ -245,7 +254,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: check --feature-powerset
-        run: cargo hack --no-dev-deps check --feature-powerset --depth 2 --skip http3,__tls,__rustls,__rustls-aws-lc-rs,native-tls-vendored,trust-dns
+        run: cargo hack --no-dev-deps check --feature-powerset --depth 2 --skip http3,__tls,__rustls,__rustls-aws-lc-rs,native-tls-vendored
         env:
           RUSTFLAGS: "-D dead_code -D unused_imports"
 

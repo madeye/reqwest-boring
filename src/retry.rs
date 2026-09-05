@@ -273,6 +273,14 @@ impl<B> tower::retry::Policy<Req, http::Response<B>, crate::Error> for Policy {
 fn is_retryable_error(err: &crate::Error) -> bool {
     use std::error::Error as _;
 
+    #[cfg(feature = "http3")]
+    {
+        let mut source = err.source();
+        while let Some(error) = source {
+            if error.is::<crate::async_impl::h3_client::transport::GoAway>() { return true; }
+            source = error.source();
+        }
+    }
     // pop the reqwest::Error
     let err = if let Some(err) = err.source() {
         err
@@ -286,17 +294,8 @@ fn is_retryable_error(err: &crate::Error) -> bool {
         return false;
     };
 
-    #[cfg(not(any(feature = "http3", feature = "http2")))]
+    #[cfg(not(feature = "http2"))]
     let _err = err;
-
-    #[cfg(feature = "http3")]
-    if let Some(cause) = err.source() {
-        if let Some(err) = cause.downcast_ref::<h3::error::ConnectionError>() {
-            log::trace!("determining if HTTP/3 error {err} can be retried");
-            // TODO: Does h3 provide an API for checking the error?
-            return err.to_string().as_str() == "timeout";
-        }
-    }
 
     #[cfg(feature = "http2")]
     if let Some(cause) = err.source() {
