@@ -52,6 +52,8 @@ The default TLS backend uses `boring` and `tokio-boring`. Building BoringSSL req
 
 Windows ARM64 builds of BoringSSL 4.x need its portable C implementation. Set `CMAKE_TOOLCHAIN_FILE` to the absolute path of a CMake file containing `set(OPENSSL_NO_ASM ON CACHE BOOL "Use portable BoringSSL" FORCE)`, as in [the CI toolchain file](.github/cmake/windows-arm64.cmake).
 
+For 32-bit Windows GNU, use a 32-bit libclang with a 32-bit Rust host. Set `CFLAGS_i686_pc_windows_gnu`, `CXXFLAGS_i686_pc_windows_gnu`, and `BINDGEN_EXTRA_CLANG_ARGS_i686_pc_windows_gnu` to `-D_USE_32BIT_TIME_T` so BoringSSL and its generated bindings match Rust's `time_t` ABI.
+
 The `rustls` and `rustls-no-provider` features and the `tls_backend_rustls()` / `use_rustls_tls()` builder methods remain compatibility aliases for BoringSSL. A Rustls crypto provider is no longer needed. `tls_backend_preconfigured()` / `use_preconfigured_tls()` keep their signatures but accept `boring::ssl::SslConnector` in place of Rustls configuration objects; this backend-specific escape hatch has no upstream semver guarantee. Configure HTTP/3 through the standard builder methods.
 
 Apple platforms use Security.framework to validate system trust; Windows loads the system root store, and other native platforms use system CA files. Custom certificates, PEM client identities, certificate revocation lists, TLS versions, SNI, key logging, and TLS metadata remain available through the existing API.

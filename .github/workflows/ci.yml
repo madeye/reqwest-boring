@@ -220,6 +220,11 @@ jobs:
           if ($process.ExitCode -ne 0) { throw "LLVM installation failed: $($process.ExitCode)" }
           if (!(Test-Path "$llvm/bin/libclang.dll")) { throw '32-bit libclang was not installed' }
           "LIBCLANG_PATH=$llvm/bin" >> $env:GITHUB_ENV
+          # Rust's i686 GNU libc uses 32-bit time_t. Match it in both the C
+          # library and bindgen, rather than generating incompatible ABIs.
+          'CFLAGS_i686_pc_windows_gnu=-D_USE_32BIT_TIME_T' >> $env:GITHUB_ENV
+          'CXXFLAGS_i686_pc_windows_gnu=-D_USE_32BIT_TIME_T' >> $env:GITHUB_ENV
+          'BINDGEN_EXTRA_CLANG_ARGS_i686_pc_windows_gnu=-D_USE_32BIT_TIME_T' >> $env:GITHUB_ENV
 
       - name: Install BoringSSL build prerequisites (Linux)
         if: runner.os == 'Linux'
