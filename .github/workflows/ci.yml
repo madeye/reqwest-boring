@@ -48,7 +48,7 @@ jobs:
 
       - name: temporary workaround - fmt all files under src
         # Workaround for rust-lang/cargo#7732
-        run: cargo fmt -- --check $(find . -name '*.rs' -print)
+        run: git ls-files -z '*.rs' | xargs -0 cargo fmt -- --check
 
   test:
     name: ${{ matrix.name }}
@@ -59,6 +59,7 @@ jobs:
     # The build matrix does not yet support 'allow failures' at job level.
     # See `jobs.nightly` for the active nightly job definition.
     strategy:
+      fail-fast: false
       matrix:
         name:
           - linux / stable
@@ -141,7 +142,7 @@ jobs:
           - name: "feat.: rustls-no-provider"
             features: "--no-default-features --features rustls-no-provider"
           - name: "feat.: native-tls"
-            features: "--features native-tls"
+            features: "--no-default-features --features native-tls"
           - name: "feat.: rustls and rustls-no-provider"
             features: "--features rustls,rustls-no-provider"
           - name: "feat.: default-tls and native-tls"
@@ -189,8 +190,7 @@ jobs:
 
       - name: Add mingw-w64 to path for i686-gnu
         run: |
-          echo "${{ matrix.mingw64_path }}" >> $GITHUB_PATH
-          echo "C:\msys64\usr\bin" >> $GITHUB_PATH
+          printf '%s\n' '${{ matrix.mingw64_path }}' 'C:\msys64\usr\bin' >> "$GITHUB_PATH"
         if: matrix.mingw64_path
         shell: bash
 
@@ -200,7 +200,7 @@ jobs:
         shell: bash
 
       - name: Add libclang to the environment for windows x86_64-gnu
-        run: echo "LIBCLANG_PATH=C:\msys64\mingw64\bin" >> $env:GITHUB_ENV
+        run: printf '%s\n' 'LIBCLANG_PATH=C:\msys64\mingw64\bin' >> "$GITHUB_ENV"
         if: ${{ matrix.target == 'x86_64-pc-windows-gnu' }}
         shell: bash
 
@@ -231,10 +231,16 @@ jobs:
           tool: cargo-nextest
 
       - name: Run tests
+        env:
+          CI_RUST_TARGET: ${{ matrix.target }}
         run: |
           set -euxo pipefail
-          cargo nextest run --locked --workspace ${{ matrix.features }} ${{ matrix.test-features }}
-          cargo test --locked --workspace --doc ${{ matrix.features }} ${{ matrix.test-features }}
+          target_args=()
+          if [[ -n "$CI_RUST_TARGET" ]]; then
+            target_args=(--target "$CI_RUST_TARGET")
+          fi
+          cargo nextest run --locked --workspace "${target_args[@]}" ${{ matrix.features }}
+          cargo test --locked --workspace --doc "${target_args[@]}" ${{ matrix.features }}
         shell: bash
 
   features:
@@ -321,6 +327,8 @@ jobs:
           # fix up deps of deps, which don't properly specify minimum versions
           # hickory-proto -> prefix-trie
           cargo update -p prefix-trie --precise 0.8.4
+          # quiche -> enum_dispatch 0.3.0 uses the removed syn::export API
+          cargo update -p enum_dispatch --precise 0.3.13
           cargo check
           cargo check --all-features
 
@@ -342,7 +350,7 @@ jobs:
 
       - name: Get MSRV package metadata
         id: metadata
-        run: cargo metadata --no-deps --format-version 1 | jq -r '"msrv=" + .packages[0].rust_version' >> $GITHUB_OUTPUT
+        run: cargo metadata --no-deps --format-version 1 | jq -r '"msrv=" + .packages[0].rust_version' >> "$GITHUB_OUTPUT"
 
       - name: Install rust (${{ steps.metadata.outputs.msrv }})
         uses: dtolnay/rust-toolchain@master
