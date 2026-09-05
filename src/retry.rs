@@ -277,7 +277,9 @@ fn is_retryable_error(err: &crate::Error) -> bool {
     {
         let mut source = err.source();
         while let Some(error) = source {
-            if error.is::<crate::async_impl::h3_client::transport::GoAway>() { return true; }
+            if error.is::<crate::async_impl::h3_client::transport::GoAway>() {
+                return true;
+            }
             source = error.source();
         }
     }

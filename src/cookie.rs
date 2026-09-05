@@ -113,10 +113,7 @@ pub(crate) fn extract_response_cookie_headers<'a>(
 pub(crate) fn extract_response_cookies<'a>(
     headers: &'a hyper::HeaderMap,
 ) -> impl Iterator<Item = Result<Cookie<'a>, CookieParseError>> + 'a {
-    headers
-        .get_all(SET_COOKIE)
-        .iter()
-        .map(Cookie::parse)
+    headers.get_all(SET_COOKIE).iter().map(Cookie::parse)
 }
 
 /// Error representing a parse failure of a 'Set-Cookie' header.
