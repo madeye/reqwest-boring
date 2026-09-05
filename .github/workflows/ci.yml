@@ -127,11 +127,11 @@ jobs:
             mingw64_path: "C:\\msys64\\mingw64\\bin"
           - name: windows / stable-i686-gnu
             os: windows-latest
-            rust: stable-x86_64-pc-windows-gnu
+            rust: stable-i686-pc-windows-gnu
             target: i686-pc-windows-gnu
             features: "--no-default-features --features blocking,gzip,brotli,zstd,deflate,query,form,json,multipart,stream,native-tls,http2"
             package_name: mingw-w64-i686-gcc
-            mingw64_path: "C:\\msys64\\mingw64\\bin"
+            mingw64_path: "C:\\msys64\\mingw32\\bin"
 
           - name: "feat.: default-tls disabled"
             features: "--no-default-features"
@@ -195,38 +195,42 @@ jobs:
         shell: bash
 
       - name: Install x86_64 Clang & NASM
-        if: matrix.mingw64_path
+        if: matrix.target == 'x86_64-pc-windows-gnu'
         run: pacman.exe -Sy --noconfirm mingw-w64-x86_64-clang mingw-w64-x86_64-nasm
         shell: bash
 
       - name: Configure libclang (Windows GNU)
         run: printf '%s\n' 'LIBCLANG_PATH=C:\msys64\mingw64\bin' >> "$GITHUB_ENV"
-        if: matrix.mingw64_path
+        if: matrix.target == 'x86_64-pc-windows-gnu'
         shell: bash
 
       - name: Update gcc
         if: matrix.package_name
         run: pacman.exe -Sy --noconfirm ${{ matrix.package_name }}
 
-      - name: Configure 32-bit MinGW target compiler
+      - name: Install 32-bit libclang (Windows GNU)
         if: matrix.target == 'i686-pc-windows-gnu'
-        shell: bash
+        shell: pwsh
         run: |
-          # Keep bindgen and build scripts on the 64-bit host; compile target C
-          # libraries and test executables with the 32-bit MinGW toolchain.
-          printf '%s\n' \
-            'CARGO_TARGET_I686_PC_WINDOWS_GNU_LINKER=C:\msys64\mingw32\bin\gcc.exe' \
-            'CC_i686_pc_windows_gnu=C:\msys64\mingw32\bin\gcc.exe' \
-            'CXX_i686_pc_windows_gnu=C:\msys64\mingw32\bin\g++.exe' \
-            'AR_i686_pc_windows_gnu=C:\msys64\mingw32\bin\ar.exe' >> "$GITHUB_ENV"
+          # Bindgen runs inside the 32-bit Rust host and needs a 32-bit DLL.
+          $installer = Join-Path $env:RUNNER_TEMP 'llvm-win32.exe'
+          $llvm = Join-Path $env:RUNNER_TEMP 'LLVM32'
+          Invoke-WebRequest 'https://github.com/llvm/llvm-project/releases/download/llvmorg-18.1.8/LLVM-18.1.8-win32.exe' -OutFile $installer
+          $process = Start-Process $installer -ArgumentList '/S', "/D=$llvm" -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "LLVM installation failed: $($process.ExitCode)" }
+          if (!(Test-Path "$llvm/bin/libclang.dll")) { throw '32-bit libclang was not installed' }
+          "LIBCLANG_PATH=$llvm/bin" >> $env:GITHUB_ENV
 
       - name: Install BoringSSL build prerequisites (Linux)
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y cmake clang libclang-dev ninja-build
 
       - name: Install NASM (Windows)
-        if: runner.os == 'Windows' && !matrix.mingw64_path
-        run: choco install nasm --yes --no-progress
+        if: runner.os == 'Windows' && matrix.target != 'x86_64-pc-windows-gnu'
+        shell: pwsh
+        run: |
+          choco install nasm --yes --no-progress
+          'C:\Program Files\NASM' >> $env:GITHUB_PATH
 
       - name: Configure libclang (Windows MSVC)
         if: runner.os == 'Windows' && !matrix.mingw64_path
