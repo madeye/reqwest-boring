@@ -341,6 +341,12 @@ async fn native_backend_identity_formats() {
         .to_der()
         .unwrap();
     assert!(reqwest::Identity::from_pkcs12_der(&archive, "wrong password").is_err());
+    #[cfg(not(reqwest_native_tls))]
+    assert!(reqwest::Identity::from_pkcs12_der(
+        include_bytes!("support/boring/cert-only.p12"),
+        "password"
+    )
+    .is_err());
     let identities = [
         reqwest::Identity::from_pkcs12_der(&archive, "password").unwrap(),
         reqwest::Identity::from_pkcs8_pem(

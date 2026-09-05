@@ -281,15 +281,46 @@ impl Identity {
         }
         #[cfg(not(reqwest_native_tls))]
         {
-            let parsed = boring::pkcs12::Pkcs12::from_der(der)
-                .and_then(|archive| archive.parse(password))
-                .map_err(crate::error::builder)?;
-            let key = parsed
-                .pkey
+            use boring::{
+                pkey::{PKey, Private},
+                stack::Stack,
+                x509::X509,
+            };
+            use foreign_types::ForeignType;
+            let archive = boring::pkcs12::Pkcs12::from_der(der).map_err(crate::error::builder)?;
+            let password = std::ffi::CString::new(password).map_err(crate::error::builder)?;
+            let mut key = std::ptr::null_mut();
+            let mut cert = std::ptr::null_mut();
+            let mut chain = std::ptr::null_mut();
+            // SAFETY: inputs and out-pointers are valid for this call. The C API
+            // can succeed without a key or matching leaf certificate, unlike
+            // boring 4.x's parse() wrapper. Wrap only non-null owned outputs so
+            // every allocation is freed even if the archive is not an identity.
+            let (key, cert, chain) = unsafe {
+                if boring_sys::PKCS12_parse(
+                    archive.as_ptr(),
+                    password.as_ptr(),
+                    &mut key,
+                    &mut cert,
+                    &mut chain,
+                ) != 1
+                {
+                    return Err(crate::error::builder(boring::error::ErrorStack::get()));
+                }
+                (
+                    std::ptr::NonNull::new(key).map(|p| PKey::<Private>::from_ptr(p.as_ptr())),
+                    std::ptr::NonNull::new(cert).map(|p| X509::from_ptr(p.as_ptr())),
+                    std::ptr::NonNull::new(chain).map(|p| Stack::<X509>::from_ptr(p.as_ptr())),
+                )
+            };
+            let key = key
+                .ok_or_else(|| crate::error::builder("private key not found"))?
                 .private_key_to_pem_pkcs8()
                 .map_err(crate::error::builder)?;
-            let mut certs = vec![parsed.cert.to_der().map_err(crate::error::builder)?];
-            if let Some(chain) = parsed.chain {
+            let cert =
+                cert.ok_or_else(|| crate::error::builder("matching certificate not found"))?;
+            let mut certs = vec![cert.to_der().map_err(crate::error::builder)?];
+            if let Some(chain) = chain {
                 for cert in chain {
                     certs.push(cert.to_der().map_err(crate::error::builder)?);
                 }
