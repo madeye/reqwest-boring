@@ -1,5 +1,25 @@
 ## Unreleased
 
+- Use BoringSSL for native-tls compatibility features on platforms that otherwise link OpenSSL; retain system TLS on Windows and Apple targets.
+- Preserve PKCS#12 and PKCS#8 identity APIs for the BoringSSL aliases.
+- Fix CI target selection, Windows libclang setup, and Quiche minimum dependency resolution; run the full matrix after individual failures.
+
+## v0.13.5 (reqwest-boring)
+
+First release of the reqwest-boring fork, based on upstream reqwest 0.13.4 and
+its subsequent unreleased changes. Earlier entries below describe upstream
+reqwest releases.
+
+- Publish as `reqwest-boring`, retaining the `reqwest` Rust library name.
+- Replace the default Rustls TLS backend with BoringSSL through `boring` and `tokio-boring`.
+- Replace Quinn with Quiche for HTTP/3, sharing the same BoringSSL build.
+- Preserve public API names and legacy Rustls feature and builder aliases.
+- Preconfigured TLS now accepts `boring::ssl::SslConnector` instead of Rustls configuration objects.
+- Retain optional native TLS and browser-provided TLS on WASM.
+- Update README and Rust documentation with fork attribution, setup, and compatibility guidance.
+
+Inherited upstream changes:
+
 - Add `Error::is_dns()` to identify errors caused by DNS resolution failures.
 - Add `ClientBuilder::http1_max_headers(usize)` to configure the maximum number of headers accepted in an HTTP/1 response (default 100).
 

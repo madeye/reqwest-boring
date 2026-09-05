@@ -64,14 +64,7 @@ async fn http3_test_failed_connection() {
         .await
         .unwrap_err();
 
-    let err = err
-        .source()
-        .unwrap()
-        .source()
-        .unwrap()
-        .downcast_ref::<quinn::ConnectionError>()
-        .unwrap();
-    assert_eq!(*err, quinn::ConnectionError::TimedOut);
+    assert!(err.is_timeout(), "expected timeout: {err:?}");
 
     let err = client
         .get(&url)
@@ -80,14 +73,7 @@ async fn http3_test_failed_connection() {
         .await
         .unwrap_err();
 
-    let err = err
-        .source()
-        .unwrap()
-        .source()
-        .unwrap()
-        .downcast_ref::<quinn::ConnectionError>()
-        .unwrap();
-    assert_eq!(*err, quinn::ConnectionError::TimedOut);
+    assert!(err.is_timeout(), "expected timeout: {err:?}");
 
     let server = server::Http3::new()
         .with_addr(addr)
@@ -186,7 +172,7 @@ async fn http3_test_h3_stop_sending_before_response_no_error() {
                 http::Response::new(response_body)
             }
         },
-        h3::error::Code::H3_NO_ERROR,
+        0x100,
     );
 
     let (request_tx, request_rx) = tokio::sync::mpsc::unbounded_channel::<bytes::Bytes>();
@@ -279,7 +265,7 @@ async fn http3_test_h3_stop_sending_before_response_no_error_request_body() {
                 http::Response::new(response_body)
             }
         },
-        h3::error::Code::H3_NO_ERROR,
+        0x100,
     );
 
     let (request_tx, request_rx) = tokio::sync::mpsc::unbounded_channel::<bytes::Bytes>();
@@ -374,7 +360,7 @@ async fn http3_test_h3_stop_sending_before_response_internal_error() {
                 http::Response::new(response_body)
             }
         },
-        h3::error::Code::H3_INTERNAL_ERROR,
+        0x102,
     );
 
     let (request_tx, request_rx) = tokio::sync::mpsc::unbounded_channel::<bytes::Bytes>();
@@ -424,31 +410,35 @@ async fn http3_test_h3_stop_sending_before_response_internal_error() {
         .unwrap();
     drop(response_tx);
 
-    let err = res.chunk().await.unwrap_err();
-    assert!(err.is_decode());
-    let err = err
-        .source()
-        .unwrap()
-        .source()
-        .unwrap()
-        .downcast_ref::<h3::error::StreamError>()
-        .expect("h3 stream error");
-    assert!(matches!(
-        err,
-        h3::error::StreamError::RemoteTerminate {
-            code: h3::error::Code::H3_INTERNAL_ERROR,
-            ..
+    // Response data and the upload error can arrive in either order. The error
+    // must be observed before the body reports a successful end of stream.
+    let err = loop {
+        match res.chunk().await {
+            Ok(Some(_)) => continue,
+            Ok(None) => panic!("upload error was lost at end of response"),
+            Err(error) => break error,
         }
-    ));
+    };
+    assert!(err.is_decode());
+    let mut source = err.source();
+    let mut found = false;
+    while let Some(err) = source {
+        if matches!(
+            err.downcast_ref::<quiche::h3::Error>(),
+            Some(quiche::h3::Error::TransportError(
+                quiche::Error::StreamStopped(0x102)
+            ))
+        ) {
+            found = true;
+        }
+        source = err.source();
+    }
+    assert!(found, "expected peer STOP_SENDING error");
 }
 
 #[cfg(feature = "http3")]
 #[tokio::test]
 async fn http3_test_reconnection() {
-    use std::error::Error;
-
-    use h3::error::{ConnectionError, StreamError};
-
     let server = server::Http3::new().build(|_| async { http::Response::default() });
     let addr = server.addr();
 
@@ -478,21 +468,7 @@ async fn http3_test_reconnection() {
         .await
         .unwrap_err();
 
-    let err = err
-        .source()
-        .unwrap()
-        .source()
-        .unwrap()
-        .downcast_ref::<StreamError>()
-        .unwrap();
-
-    assert!(matches!(
-        err,
-        StreamError::ConnectionError {
-            0: ConnectionError::Timeout { .. },
-            ..
-        }
-    ));
+    assert!(err.is_timeout(), "expected timeout: {err:?}");
 
     let server = server::Http3::new()
         .with_addr(addr)
@@ -585,4 +561,104 @@ async fn http3_request_stream_error() {
         .downcast_ref::<reqwest::Error>()
         .unwrap();
     assert!(err.is_body());
+}
+
+#[tokio::test]
+async fn http3_verified_tls_large_body_and_cancellation() {
+    use http_body_util::BodyExt;
+    let server = server::Http3::new().build(|req| async move {
+        let body = req.collect().await.unwrap().to_bytes();
+        http::Response::new(reqwest::Body::from(body))
+    });
+    let ca = reqwest::Certificate::from_pem(include_bytes!("support/boring/ca.pem")).unwrap();
+    let client = reqwest::Client::builder()
+        .http3_prior_knowledge()
+        .no_proxy()
+        .tls_certs_only([ca])
+        .resolve("localhost", server.addr())
+        .http3_stream_receive_window(32768)
+        .http3_conn_receive_window(65536)
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .unwrap();
+    let url = format!("https://localhost:{}/", server.addr().port());
+    let body = vec![0x42; 1024 * 1024];
+    let mut response = client
+        .post(&url)
+        .version(http::Version::HTTP_3)
+        .body(body.clone())
+        .send()
+        .await
+        .unwrap();
+    // Pause the consumer long enough to fill its bounded receive channel.
+    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    assert!(!response.chunk().await.unwrap().unwrap().is_empty());
+    drop(response);
+    let response = client
+        .post(&url)
+        .version(http::Version::HTTP_3)
+        .body(body.clone())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.bytes().await.unwrap(), body);
+}
+
+#[tokio::test]
+async fn http3_tls13_required() {
+    assert!(reqwest::Client::builder()
+        .http3_prior_knowledge()
+        .tls_version_max(reqwest::tls::Version::TLS_1_2)
+        .build()
+        .is_err());
+}
+
+#[tokio::test]
+async fn http3_goaway_reconnects_without_losing_response() {
+    let server = server::Http3::new()
+        .with_goaway()
+        .build(|_| async { http::Response::new(reqwest::Body::from("draining")) });
+    let client = reqwest::Client::builder()
+        .http3_prior_knowledge()
+        .danger_accept_invalid_certs(true)
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .unwrap();
+    for _ in 0..3 {
+        let response = client
+            .get(format!("https://{}/", server.addr()))
+            .version(http::Version::HTTP_3)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.text().await.unwrap(), "draining");
+    }
+}
+
+#[tokio::test]
+async fn http3_session_resumption_with_early_data() {
+    let server = server::Http3::new()
+        .build(|_| async { http::Response::new(reqwest::Body::from("resumed")) });
+    let client = reqwest::Client::builder()
+        .http3_prior_knowledge()
+        .danger_accept_invalid_certs(true)
+        .tls_early_data(true)
+        .pool_idle_timeout(std::time::Duration::ZERO)
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .unwrap();
+    let url = format!("https://{}/", server.addr());
+    for round in 0..3 {
+        let response = client
+            .get(&url)
+            .version(http::Version::HTTP_3)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            response.headers()["x-test-session-reused"],
+            if round == 0 { "false" } else { "true" }
+        );
+        assert_eq!(response.text().await.unwrap(), "resumed");
+    }
 }

@@ -48,7 +48,7 @@ jobs:
 
       - name: temporary workaround - fmt all files under src
         # Workaround for rust-lang/cargo#7732
-        run: cargo fmt -- --check $(find . -name '*.rs' -print)
+        run: git ls-files -z '*.rs' | xargs -0 cargo fmt -- --check
 
   test:
     name: ${{ matrix.name }}
@@ -56,12 +56,10 @@ jobs:
 
     runs-on: ${{ matrix.os || 'ubuntu-latest' }}
 
-    env:
-      AWS_LC_SYS_PREBUILT_NASM: ${{ matrix.aws_lc_sys_prebuilt_nasm || 0 }}
-
     # The build matrix does not yet support 'allow failures' at job level.
     # See `jobs.nightly` for the active nightly job definition.
     strategy:
+      fail-fast: false
       matrix:
         name:
           - linux / stable
@@ -75,6 +73,7 @@ jobs:
           - windows / stable-x86_64-gnu
           - windows / stable-i686-gnu
           - "feat.: default-tls disabled"
+          - "feat.: boring"
           - "feat.: rustls"
           - "feat.: rustls-no-provider"
           - "feat.: native-tls"
@@ -111,17 +110,14 @@ jobs:
             os: windows-latest
             target: x86_64-pc-windows-msvc
             features: "--features blocking,gzip,brotli,zstd,deflate,query,form,json,multipart,stream"
-            aws_lc_sys_prebuilt_nasm: 1
           - name: windows / stable-i686-msvc
             os: windows-latest
             target: i686-pc-windows-msvc
             features: "--features blocking,gzip,brotli,zstd,deflate,query,form,json,multipart,stream"
-            aws_lc_sys_prebuilt_nasm: 1
           - name: windows / stable-aarch64-msvc
             os: windows-11-arm
             target: aarch64-pc-windows-msvc
             features: "--features blocking,gzip,brotli,zstd,deflate,query,form,json,multipart,stream"
-            aws_lc_sys_prebuilt_nasm: 1
           - name: windows / stable-x86_64-gnu
             os: windows-latest
             rust: stable-x86_64-pc-windows-gnu
@@ -129,7 +125,6 @@ jobs:
             features: "--features blocking,gzip,brotli,zstd,deflate,query,form,json,multipart,stream"
             package_name: mingw-w64-x86_64-gcc
             mingw64_path: "C:\\msys64\\mingw64\\bin"
-            aws_lc_sys_prebuilt_nasm: 1
           - name: windows / stable-i686-gnu
             os: windows-latest
             rust: stable-i686-pc-windows-gnu
@@ -140,12 +135,14 @@ jobs:
 
           - name: "feat.: default-tls disabled"
             features: "--no-default-features"
+          - name: "feat.: boring"
+            features: "--no-default-features --features boring"
           - name: "feat.: rustls"
             features: "--no-default-features --features rustls"
           - name: "feat.: rustls-no-provider"
             features: "--no-default-features --features rustls-no-provider"
           - name: "feat.: native-tls"
-            features: "--features native-tls"
+            features: "--no-default-features --features native-tls"
           - name: "feat.: rustls and rustls-no-provider"
             features: "--features rustls,rustls-no-provider"
           - name: "feat.: default-tls and native-tls"
@@ -191,26 +188,64 @@ jobs:
           toolchain: ${{ matrix.rust || 'stable' }}
           targets: ${{ matrix.target }}
 
-      - name: Add mingw-w64 to path for i686-gnu
+      - name: Add MinGW host tools to PATH
         run: |
-          echo "${{ matrix.mingw64_path }}" >> $GITHUB_PATH
-          echo "C:\msys64\usr\bin" >> $GITHUB_PATH
+          printf '%s\n' '${{ matrix.mingw64_path }}' 'C:\msys64\usr\bin' >> "$GITHUB_PATH"
         if: matrix.mingw64_path
         shell: bash
 
       - name: Install x86_64 Clang & NASM
-        if: ${{ matrix.target == 'x86_64-pc-windows-gnu' }}
+        if: matrix.target == 'x86_64-pc-windows-gnu'
         run: pacman.exe -Sy --noconfirm mingw-w64-x86_64-clang mingw-w64-x86_64-nasm
         shell: bash
 
-      - name: Add libclang to the environment for windows x86_64-gnu
-        run: echo "LIBCLANG_PATH=C:\msys64\mingw64\bin" >> $env:GITHUB_ENV
-        if: ${{ matrix.target == 'x86_64-pc-windows-gnu' }}
+      - name: Configure libclang (Windows GNU)
+        run: printf '%s\n' 'LIBCLANG_PATH=C:\msys64\mingw64\bin' >> "$GITHUB_ENV"
+        if: matrix.target == 'x86_64-pc-windows-gnu'
         shell: bash
 
       - name: Update gcc
         if: matrix.package_name
         run: pacman.exe -Sy --noconfirm ${{ matrix.package_name }}
+
+      - name: Install 32-bit libclang (Windows GNU)
+        if: matrix.target == 'i686-pc-windows-gnu'
+        shell: pwsh
+        run: |
+          # Bindgen runs inside the 32-bit Rust host and needs a 32-bit DLL.
+          $installer = Join-Path $env:RUNNER_TEMP 'llvm-win32.exe'
+          $llvm = Join-Path $env:RUNNER_TEMP 'LLVM32'
+          Invoke-WebRequest 'https://github.com/llvm/llvm-project/releases/download/llvmorg-18.1.8/LLVM-18.1.8-win32.exe' -OutFile $installer
+          $process = Start-Process $installer -ArgumentList '/S', "/D=$llvm" -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "LLVM installation failed: $($process.ExitCode)" }
+          if (!(Test-Path "$llvm/bin/libclang.dll")) { throw '32-bit libclang was not installed' }
+          "LIBCLANG_PATH=$llvm/bin" >> $env:GITHUB_ENV
+          # Rust's i686 GNU libc uses 32-bit time_t. Match it in both the C
+          # library and bindgen, rather than generating incompatible ABIs.
+          'CFLAGS_i686_pc_windows_gnu=-D_USE_32BIT_TIME_T' >> $env:GITHUB_ENV
+          'CXXFLAGS_i686_pc_windows_gnu=-D_USE_32BIT_TIME_T' >> $env:GITHUB_ENV
+          'BINDGEN_EXTRA_CLANG_ARGS_i686_pc_windows_gnu=-D_USE_32BIT_TIME_T' >> $env:GITHUB_ENV
+
+      - name: Install BoringSSL build prerequisites (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y cmake clang libclang-dev ninja-build
+
+      - name: Install NASM (Windows)
+        if: runner.os == 'Windows' && matrix.target != 'x86_64-pc-windows-gnu'
+        shell: pwsh
+        run: |
+          choco install nasm --yes --no-progress
+          'C:\Program Files\NASM' >> $env:GITHUB_PATH
+
+      - name: Configure libclang (Windows MSVC)
+        if: runner.os == 'Windows' && !matrix.mingw64_path
+        shell: pwsh
+        run: '"LIBCLANG_PATH=C:\Program Files\LLVM\bin" >> $env:GITHUB_ENV'
+
+      - name: Configure portable BoringSSL (Windows ARM64)
+        if: matrix.target == 'aarch64-pc-windows-msvc'
+        shell: pwsh
+        run: '"CMAKE_TOOLCHAIN_FILE=$env:GITHUB_WORKSPACE/.github/cmake/windows-arm64.cmake" >> $env:GITHUB_ENV'
 
       - name: Create Cargo.lock
         run: cargo update
@@ -222,10 +257,15 @@ jobs:
           tool: cargo-nextest
 
       - name: Run tests
+        env:
+          CI_RUST_TARGET: ${{ matrix.target }}
         run: |
           set -euxo pipefail
-          cargo nextest run --locked --workspace ${{ matrix.features }} ${{ matrix.test-features }}
-          cargo test --locked --workspace --doc ${{ matrix.features }} ${{ matrix.test-features }}
+          if [[ -n "$CI_RUST_TARGET" ]]; then
+            export CARGO_BUILD_TARGET="$CI_RUST_TARGET"
+          fi
+          cargo nextest run --locked --workspace ${{ matrix.features }}
+          cargo test --locked --workspace --doc ${{ matrix.features }}
         shell: bash
 
   features:
@@ -245,7 +285,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: check --feature-powerset
-        run: cargo hack --no-dev-deps check --feature-powerset --depth 2 --skip http3,__tls,__rustls,__rustls-aws-lc-rs,native-tls-vendored,trust-dns
+        run: cargo hack --no-dev-deps check --feature-powerset --depth 2 --skip http3,__tls,__rustls,__rustls-aws-lc-rs,native-tls-vendored
         env:
           RUSTFLAGS: "-D dead_code -D unused_imports"
 
@@ -312,6 +352,8 @@ jobs:
           # fix up deps of deps, which don't properly specify minimum versions
           # hickory-proto -> prefix-trie
           cargo update -p prefix-trie --precise 0.8.4
+          # quiche -> enum_dispatch 0.3.0 uses the removed syn::export API
+          cargo update -p enum_dispatch --precise 0.3.13
           cargo check
           cargo check --all-features
 
@@ -333,7 +375,7 @@ jobs:
 
       - name: Get MSRV package metadata
         id: metadata
-        run: cargo metadata --no-deps --format-version 1 | jq -r '"msrv=" + .packages[0].rust_version' >> $GITHUB_OUTPUT
+        run: cargo metadata --no-deps --format-version 1 | jq -r '"msrv=" + .packages[0].rust_version' >> "$GITHUB_OUTPUT"
 
       - name: Install rust (${{ steps.metadata.outputs.msrv }})
         uses: dtolnay/rust-toolchain@master

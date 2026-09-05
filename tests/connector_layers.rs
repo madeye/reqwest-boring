@@ -1,5 +1,4 @@
 #![cfg(not(target_arch = "wasm32"))]
-#![cfg(not(feature = "rustls-no-provider"))]
 mod support;
 
 use std::time::Duration;

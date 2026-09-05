@@ -1,5 +1,4 @@
 #![cfg(not(target_arch = "wasm32"))]
-#![cfg(not(feature = "rustls-no-provider"))]
 mod support;
 use support::server;
 
@@ -121,12 +120,15 @@ async fn system_http_proxy_basic_auth_parsed() {
 
     // save system setting first.
     let system_proxy = env::var("http_proxy");
+    let system_proxy_uppercase = env::var("HTTP_PROXY");
 
     // set-up http proxy.
     env::set_var(
         "http_proxy",
         format!("http://Aladdin:opensesame@{}", server.addr()),
     );
+
+    env::set_var("HTTP_PROXY", env::var("http_proxy").unwrap());
 
     let res = reqwest::Client::builder()
         .build()
@@ -143,6 +145,10 @@ async fn system_http_proxy_basic_auth_parsed() {
     match system_proxy {
         Err(_) => env::remove_var("http_proxy"),
         Ok(proxy) => env::set_var("http_proxy", proxy),
+    }
+    match system_proxy_uppercase {
+        Err(_) => env::remove_var("HTTP_PROXY"),
+        Ok(proxy) => env::set_var("HTTP_PROXY", proxy),
     }
 }
 
@@ -223,8 +229,11 @@ async fn test_using_system_proxy() {
 
     // save system setting first.
     let system_proxy = env::var("http_proxy");
+    let system_proxy_uppercase = env::var("HTTP_PROXY");
     // set-up http proxy.
     env::set_var("http_proxy", format!("http://{}", server.addr()));
+
+    env::set_var("HTTP_PROXY", env::var("http_proxy").unwrap());
 
     // system proxy is used by default
     let res = reqwest::get(url).await.unwrap();
@@ -236,6 +245,10 @@ async fn test_using_system_proxy() {
     match system_proxy {
         Err(_) => env::remove_var("http_proxy"),
         Ok(proxy) => env::set_var("http_proxy", proxy),
+    }
+    match system_proxy_uppercase {
+        Err(_) => env::remove_var("HTTP_PROXY"),
+        Ok(proxy) => env::set_var("HTTP_PROXY", proxy),
     }
 }
 

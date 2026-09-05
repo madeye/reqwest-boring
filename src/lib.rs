@@ -4,10 +4,22 @@
 #![cfg_attr(not(test), warn(unused_crate_dependencies))]
 #![cfg_attr(test, deny(warnings))]
 
-//! # reqwest
+//! # reqwest-boring
 //!
-//! The `reqwest` crate provides a convenient, higher-level HTTP
-//! [`Client`][client].
+//! `reqwest-boring` is a fork of the original
+//! [reqwest](https://github.com/seanmonstar/reqwest) HTTP client by Sean McArthur
+//! and contributors. It uses [boring](https://crates.io/crates/boring), the Rust
+//! bindings to BoringSSL, as its default TLS layer, and
+//! [Quiche](https://github.com/cloudflare/quiche) for HTTP/3.
+//!
+//! The package is named `reqwest-boring`, while the Rust library remains
+//! `reqwest`, preserving the familiar [`Client`][client], request, response,
+//! and builder APIs. See [TLS](#tls) for backend-specific configuration.
+//!
+//! ```toml
+//! [dependencies]
+//! reqwest = { package = "reqwest-boring", version = "0.13.5", features = ["json"] }
+//! ```
 //!
 //! It handles many of the things that most people just expect an HTTP client
 //! to do for them.
@@ -16,7 +28,8 @@
 //! - Plain bodies, [JSON](#json), [urlencoded](#forms), [multipart]
 //! - Customizable [redirect policy](#redirect-policies)
 //! - HTTP [Proxies](#proxies)
-//! - Uses [TLS](#tls) by default
+//! - Uses BoringSSL for [TLS](#tls) by default
+//! - Experimental HTTP/3 through Quiche
 //! - Cookies
 //!
 //! The [`reqwest::Client`][client] is asynchronous (requiring Tokio). For
@@ -26,12 +39,7 @@
 //! Additional learning resources include:
 //!
 //! - [The Rust Cookbook](https://rust-lang-nursery.github.io/rust-cookbook/web/clients.html)
-//! - [reqwest Repository Examples](https://github.com/seanmonstar/reqwest/tree/master/examples)
-//!
-//! ## Commercial Support
-//!
-//! For private advice, support, reviews, access to the maintainer, and the
-//! like, reach out for [commercial support][sponsor].
+//! - [reqwest-boring Repository Examples](https://github.com/madeye/reqwest-boring/tree/master/examples)
 //!
 //! ## Making a GET request
 //!
@@ -163,8 +171,21 @@
 //!
 //! ## TLS
 //!
-//! A `Client` will use transport layer security (TLS) by default to connect to
-//! HTTPS destinations.
+//! On native targets, a `Client` uses BoringSSL through the `boring` and
+//! `tokio-boring` crates by default to connect to HTTPS destinations. The
+//! optional `native-tls` backend uses system TLS on Windows and Apple targets;
+//! on other platforms its features and builder methods are BoringSSL aliases.
+//! Browser WASM targets use
+//! the browser's TLS implementation.
+//!
+//! The `rustls` and `rustls-no-provider` features and the
+//! `tls_backend_rustls()` / `use_rustls_tls()` builder methods are compatibility
+//! aliases for BoringSSL. Preconfigured TLS methods retain their signatures but
+//! now accept `boring::ssl::SslConnector` instead of Rustls configuration
+//! objects. Configure HTTP/3 through the standard builder methods.
+//!
+//! Building BoringSSL requires a C/C++ compiler, CMake, Perl, and libclang.
+//! Windows builds additionally require LLVM and NASM.
 //!
 //! - Additional server certificates can be configured on a `ClientBuilder`
 //!   with the [`Certificate`] type.
@@ -190,14 +211,14 @@
 //! enabled or disabled:
 //!
 //! - **http2** *(enabled by default)*: Enables HTTP/2 support.
-//! - **default-tls** *(enabled by default)*: Provides TLS support to connect
-//!   over HTTPS.
-//! - **rustls**: Enables TLS functionality provided by `rustls`.
-//! - **rustls-no-provider**: Enables TLS provided by `rustls` without specifying a crypto provider.
-//! - **native-tls**: Enables TLS functionality provided by `native-tls`.
-//! - **native-tls-vendored**: Enables the `vendored` feature of `native-tls`.
-//! - **native-tls-no-alpn**: Enables `native-tls` without its `alpn` feature.
-//! - **native-tls-vendored-no-alpn**: Enables `native-tls-vendored` without its `alpn` feature.
+//! - **default-tls** *(enabled by default)*: Provides HTTPS support through BoringSSL.
+//! - **boring**: Enables TLS functionality provided by BoringSSL.
+//! - **rustls**: Compatibility alias for `boring`.
+//! - **rustls-no-provider**: Compatibility alias for `boring`; no provider installation is needed.
+//! - **native-tls**: Enables system TLS on Windows and Apple targets; a BoringSSL alias elsewhere.
+//! - **native-tls-vendored**: Compatibility alias for `native-tls`; OpenSSL is not linked.
+//! - **native-tls-no-alpn**: Enables `native-tls` without its `alpn` feature on system TLS targets.
+//! - **native-tls-vendored-no-alpn**: Compatibility alias for `native-tls-no-alpn`.
 //! - **blocking**: Provides the [blocking][] client API.
 //! - **charset** *(enabled by default)*: Improved support for decoding text.
 //! - **cookies**: Provides cookie session support.
@@ -221,7 +242,8 @@
 //! Some feature flags require additional opt-in by the application, by setting
 //! a `reqwest_unstable` flag.
 //!
-//! - **http3** *(unstable)*: Enables support for sending HTTP/3 requests.
+//! - **http3** *(unstable)*: Enables HTTP/3 through Quiche, sharing the same
+//!   BoringSSL build as the default TLS backend.
 //!
 //! These features are unstable, and experimental. Details about them may be
 //! changed in patch releases.
@@ -233,9 +255,11 @@
 //! RUSTFLAGS="--cfg reqwest_unstable" cargo build
 //! ```
 //!
-//! ## Sponsors
+//! ## Attribution
 //!
-//! Support this project by becoming a [sponsor][].
+//! This fork retains the original reqwest project's MIT and Apache-2.0 licenses
+//! and copyright notices. Report fork-specific issues at
+//! [madeye/reqwest-boring](https://github.com/madeye/reqwest-boring/issues).
 //!
 //! [hyper]: https://hyper.rs
 //! [blocking]: ./blocking/index.html
@@ -247,7 +271,6 @@
 //! [redirect]: crate::redirect
 //! [Proxy]: ./struct.Proxy.html
 //! [cargo-features]: https://doc.rust-lang.org/stable/cargo/reference/manifest.html#the-features-section
-//! [sponsor]: https://seanmonstar.com/sponsor
 
 #[cfg(all(feature = "http3", not(reqwest_unstable)))]
 compile_error!(
@@ -372,6 +395,10 @@ if_hyper! {
     mod async_impl;
     #[cfg(feature = "blocking")]
     pub mod blocking;
+    #[cfg(feature = "__rustls")]
+    mod boring_tls;
+    #[cfg(feature = "__rustls")]
+    mod boring_connector;
     mod connect;
     #[cfg(feature = "cookies")]
     pub mod cookie;

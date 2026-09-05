@@ -1,5 +1,4 @@
 #![cfg(not(target_arch = "wasm32"))]
-#![cfg(not(feature = "rustls-no-provider"))]
 mod support;
 
 use support::server;
@@ -114,7 +113,7 @@ async fn response_text() {
     let client = Client::new();
 
     let res = client
-        .get(&format!("http://{}/text", server.addr()))
+        .get(format!("http://{}/text", server.addr()))
         .send()
         .await
         .expect("Failed to get");
@@ -132,7 +131,7 @@ async fn response_bytes() {
     let client = Client::new();
 
     let res = client
-        .get(&format!("http://{}/bytes", server.addr()))
+        .get(format!("http://{}/bytes", server.addr()))
         .send()
         .await
         .expect("Failed to get");
@@ -151,7 +150,7 @@ async fn response_json() {
     let client = Client::new();
 
     let res = client
-        .get(&format!("http://{}/json", server.addr()))
+        .get(format!("http://{}/json", server.addr()))
         .send()
         .await
         .expect("Failed to get");
@@ -188,7 +187,7 @@ async fn body_pipe_response() {
     let client = Client::new();
 
     let res1 = client
-        .get(&format!("http://{}/get", server.addr()))
+        .get(format!("http://{}/get", server.addr()))
         .send()
         .await
         .expect("get1");
@@ -198,7 +197,7 @@ async fn body_pipe_response() {
 
     // and now ensure we can "pipe" the response to another request
     let res2 = client
-        .post(&format!("http://{}/pipe", server.addr()))
+        .post(format!("http://{}/pipe", server.addr()))
         .body(res1)
         .send()
         .await
@@ -354,7 +353,7 @@ async fn overridden_dns_resolution_with_hickory_dns_multiple() {
     assert_eq!("Hello", text);
 }
 
-#[cfg(any(feature = "__native-tls", feature = "__rustls",))]
+#[cfg(any(reqwest_native_tls, feature = "__rustls",))]
 #[test]
 fn use_preconfigured_tls_with_bogus_backend() {
     struct DefinitelyNotTls;
@@ -365,7 +364,7 @@ fn use_preconfigured_tls_with_bogus_backend() {
         .expect_err("definitely is not TLS");
 }
 
-#[cfg(feature = "__native-tls")]
+#[cfg(reqwest_native_tls)]
 #[test]
 fn use_preconfigured_native_tls_default() {
     extern crate native_tls_crate;
@@ -380,24 +379,16 @@ fn use_preconfigured_native_tls_default() {
         .expect("preconfigured default tls");
 }
 
-#[cfg(feature = "rustls")] // needs a TLS provider
+#[cfg(feature = "__rustls")]
 #[test]
-fn use_preconfigured_rustls_default() {
-    extern crate rustls;
-
-    let root_cert_store = rustls::RootCertStore::empty();
-    let tls = rustls::ClientConfig::builder_with_provider(std::sync::Arc::new(
-        rustls::crypto::aws_lc_rs::default_provider(),
-    ))
-    .with_safe_default_protocol_versions()
-    .unwrap()
-    .with_root_certificates(root_cert_store)
-    .with_no_client_auth();
-
+fn use_preconfigured_boring() {
+    let tls = boring::ssl::SslConnector::builder(boring::ssl::SslMethod::tls())
+        .unwrap()
+        .build();
     reqwest::Client::builder()
         .use_preconfigured_tls(tls)
         .build()
-        .expect("preconfigured rustls tls");
+        .expect("preconfigured boring TLS");
 }
 
 #[cfg(all(feature = "__tls", not(any(feature = "http2", feature = "http3")),))]
@@ -491,7 +482,7 @@ fn update_json_content_type_if_set_manually() {
     assert_eq!("application/json", req.headers().get(CONTENT_TYPE).unwrap());
 }
 
-#[cfg(all(feature = "__tls", not(feature = "rustls-no-provider")))]
+#[cfg(feature = "__tls")]
 #[tokio::test]
 async fn test_tls_info() {
     let resp = reqwest::Client::builder()
@@ -521,7 +512,7 @@ async fn test_tls_info() {
     assert!(tls_info.is_none());
 }
 
-#[cfg(all(feature = "__rustls", not(feature = "rustls-no-provider")))]
+#[cfg(feature = "__rustls")]
 #[tokio::test]
 async fn test_tls_info_version_rustls() {
     let resp = reqwest::Client::builder()
@@ -546,7 +537,7 @@ async fn test_tls_info_version_rustls() {
 
 // native-tls cannot report the negotiated version, so it stays `None` even
 // though the rest of the `TlsInfo` is populated.
-#[cfg(feature = "__native-tls")]
+#[cfg(reqwest_native_tls)]
 #[tokio::test]
 async fn test_tls_info_version_native_tls() {
     let resp = reqwest::Client::builder()
@@ -601,7 +592,7 @@ async fn http1_reason_phrase() {
     let client = Client::new();
 
     let res = client
-        .get(&format!("http://{}", server.addr()))
+        .get(format!("http://{}", server.addr()))
         .send()
         .await
         .expect("Failed to get");
@@ -618,7 +609,14 @@ async fn http1_reason_phrase() {
 #[tokio::test]
 async fn error_has_url() {
     let u = "http://does.not.exist.local/ever";
-    let err = reqwest::get(u).await.unwrap_err();
+    let err = reqwest::Client::builder()
+        .no_proxy()
+        .build()
+        .unwrap()
+        .get(u)
+        .send()
+        .await
+        .unwrap_err();
     assert_eq!(err.url().map(AsRef::as_ref), Some(u), "{err:?}");
 }
 

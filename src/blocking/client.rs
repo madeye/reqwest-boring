@@ -1,4 +1,4 @@
-#[cfg(any(feature = "__native-tls", feature = "__rustls",))]
+#[cfg(any(reqwest_native_tls, feature = "__rustls",))]
 use std::any::Any;
 use std::convert::TryInto;
 use std::fmt;
@@ -31,7 +31,7 @@ use crate::tls;
 use crate::tls::CertificateRevocationList;
 #[cfg(feature = "__tls")]
 use crate::Certificate;
-#[cfg(any(feature = "__native-tls", feature = "__rustls"))]
+#[cfg(any(reqwest_native_tls, feature = "__rustls"))]
 use crate::Identity;
 use crate::{async_impl, header, redirect, IntoUrl, Method, Proxy};
 
@@ -581,9 +581,9 @@ impl ClientBuilder {
 
     /// Maximum duration of inactivity to accept before timing out the QUIC connection.
     ///
-    /// Please see docs in [`TransportConfig`] in [`quinn`].
+    /// See the corresponding flow-control settings in [`quiche::Config`].
     ///
-    /// [`TransportConfig`]: https://docs.rs/quinn/latest/quinn/struct.TransportConfig.html
+    /// [`quiche::Config`]: https://docs.rs/quiche/0.28.0/quiche/struct.Config.html
     #[cfg(feature = "http3")]
     #[cfg_attr(docsrs, doc(cfg(all(reqwest_unstable, feature = "http3",))))]
     pub fn http3_max_idle_timeout(self, value: Duration) -> ClientBuilder {
@@ -593,9 +593,9 @@ impl ClientBuilder {
     /// Maximum number of bytes the peer may transmit without acknowledgement on any one stream
     /// before becoming blocked.
     ///
-    /// Please see docs in [`TransportConfig`] in [`quinn`].
+    /// See the corresponding flow-control settings in [`quiche::Config`].
     ///
-    /// [`TransportConfig`]: https://docs.rs/quinn/latest/quinn/struct.TransportConfig.html
+    /// [`quiche::Config`]: https://docs.rs/quiche/0.28.0/quiche/struct.Config.html
     ///
     /// # Panics
     ///
@@ -609,9 +609,9 @@ impl ClientBuilder {
     /// Maximum number of bytes the peer may transmit across all streams of a connection before
     /// becoming blocked.
     ///
-    /// Please see docs in [`TransportConfig`] in [`quinn`].
+    /// See the corresponding flow-control settings in [`quiche::Config`].
     ///
-    /// [`TransportConfig`]: https://docs.rs/quinn/latest/quinn/struct.TransportConfig.html
+    /// [`quiche::Config`]: https://docs.rs/quiche/0.28.0/quiche/struct.Config.html
     ///
     /// # Panics
     ///
@@ -624,9 +624,9 @@ impl ClientBuilder {
 
     /// Maximum number of bytes to transmit to a peer without acknowledgment
     ///
-    /// Please see docs in [`TransportConfig`] in [`quinn`].
+    /// See the corresponding flow-control settings in [`quiche::Config`].
     ///
-    /// [`TransportConfig`]: https://docs.rs/quinn/latest/quinn/struct.TransportConfig.html
+    /// [`quiche::Config`]: https://docs.rs/quiche/0.28.0/quiche/struct.Config.html
     #[cfg(feature = "http3")]
     #[cfg_attr(docsrs, doc(cfg(all(reqwest_unstable, feature = "http3",))))]
     pub fn http3_send_window(self, value: u64) -> ClientBuilder {
@@ -652,9 +652,9 @@ impl ClientBuilder {
     ///
     /// [header size constraints]: https://www.rfc-editor.org/rfc/rfc9114.html#name-header-size-constraints
     ///
-    /// Please see docs in [`Builder`] in [`h3`].
+    /// See the corresponding settings in [`quiche::h3::Config`].
     ///
-    /// [`Builder`]: https://docs.rs/h3/latest/h3/client/struct.Builder.html#method.max_field_section_size
+    /// [`quiche::h3::Config`]: https://docs.rs/quiche/0.28.0/quiche/h3/struct.Config.html
     #[cfg(feature = "http3")]
     #[cfg_attr(docsrs, doc(cfg(all(reqwest_unstable, feature = "http3",))))]
     pub fn http3_max_field_section_size(self, value: u64) -> ClientBuilder {
@@ -669,9 +669,9 @@ impl ClientBuilder {
     /// In HTTP/3, the concept of grease is used to ensure that the protocol can evolve
     /// and accommodate future changes without breaking existing implementations.
     ///
-    /// Please see docs in [`Builder`] in [`h3`].
+    /// See the corresponding settings in [`quiche::h3::Config`].
     ///
-    /// [`Builder`]: https://docs.rs/h3/latest/h3/client/struct.Builder.html#method.send_grease
+    /// [`quiche::h3::Config`]: https://docs.rs/quiche/0.28.0/quiche/h3/struct.Config.html
     #[cfg(feature = "http3")]
     #[cfg_attr(docsrs, doc(cfg(all(reqwest_unstable, feature = "http3",))))]
     pub fn http3_send_grease(self, enabled: bool) -> ClientBuilder {
@@ -824,7 +824,7 @@ impl ClientBuilder {
     ///
     /// # Optional
     ///
-    /// This requires the optional `default-tls`, `native-tls`, or `rustls(-...)`
+    /// This requires the optional `default-tls`, `native-tls`, or `boring` (or its legacy `rustls` aliases)
     /// feature to be enabled.
     #[cfg(feature = "__tls")]
     #[cfg_attr(
@@ -845,7 +845,7 @@ impl ClientBuilder {
     ///
     /// # Optional
     ///
-    /// This requires the optional `default-tls`, `native-tls`, or `rustls(-...)`
+    /// This requires the optional `default-tls`, `native-tls`, or `boring` (or its legacy `rustls` aliases)
     /// feature to be enabled.
     #[cfg(feature = "__tls")]
     #[cfg_attr(
@@ -874,7 +874,7 @@ impl ClientBuilder {
     ///
     /// # Optional
     ///
-    /// This requires the `rustls(-...)` Cargo feature enabled.
+    /// This requires the `boring` (or its legacy `rustls` aliases) Cargo feature enabled.
     #[cfg(feature = "__rustls")]
     #[cfg_attr(docsrs, doc(cfg(feature = "rustls")))]
     pub fn tls_crls_only(
@@ -905,9 +905,9 @@ impl ClientBuilder {
     ///
     /// # Optional
     ///
-    /// This requires the optional `native-tls` or `rustls(-...)` feature to be
+    /// This requires the optional `native-tls` or `boring` (or its legacy `rustls` aliases) feature to be
     /// enabled.
-    #[cfg(any(feature = "__native-tls", feature = "__rustls"))]
+    #[cfg(any(reqwest_native_tls, feature = "__rustls"))]
     #[cfg_attr(docsrs, doc(cfg(any(feature = "native-tls", feature = "rustls"))))]
     pub fn identity(self, identity: Identity) -> ClientBuilder {
         self.with_inner(move |inner| inner.identity(identity))
@@ -931,7 +931,7 @@ impl ClientBuilder {
     ///
     /// # Optional
     ///
-    /// This requires the optional `default-tls`, `native-tls`, or `rustls(-...)`
+    /// This requires the optional `default-tls`, `native-tls`, or `boring` (or its legacy `rustls` aliases)
     /// feature to be enabled.
     #[cfg(feature = "__tls")]
     #[cfg_attr(
@@ -999,7 +999,7 @@ impl ClientBuilder {
     ///
     /// # Optional
     ///
-    /// This requires the `rustls(-...)` Cargo feature enabled.
+    /// This requires the `boring` (or its legacy `rustls` aliases) Cargo feature enabled.
     #[cfg(feature = "__rustls")]
     #[cfg_attr(docsrs, doc(cfg(feature = "rustls")))]
     pub fn tls_sslkeylogfile(self, on: bool) -> ClientBuilder {
@@ -1019,7 +1019,7 @@ impl ClientBuilder {
     ///
     /// # Optional
     ///
-    /// This requires the optional `default-tls`, `native-tls`, or `rustls(-...)`
+    /// This requires the optional `default-tls`, `native-tls`, or `boring` (or its legacy `rustls` aliases)
     /// feature to be enabled.
     #[cfg(feature = "__tls")]
     #[cfg_attr(
@@ -1049,7 +1049,7 @@ impl ClientBuilder {
     ///
     /// # Optional
     ///
-    /// This requires the optional `default-tls`, `native-tls`, or `rustls(-...)`
+    /// This requires the optional `default-tls`, `native-tls`, or `boring` (or its legacy `rustls` aliases)
     /// feature to be enabled.
     #[cfg(feature = "__tls")]
     #[cfg_attr(
@@ -1069,7 +1069,9 @@ impl ClientBuilder {
     /// Force using the native TLS backend.
     ///
     /// Since multiple TLS backends can be optionally enabled, this option will
-    /// force the `native-tls` backend to be used for this `Client`.
+    /// select the system TLS backend on Windows and Apple platforms.
+    /// On other platforms this is a compatibility alias for BoringSSL, avoiding
+    /// incompatible OpenSSL and BoringSSL libraries in the same process.
     ///
     /// # Optional
     ///
@@ -1086,14 +1088,14 @@ impl ClientBuilder {
         self.with_inner(move |inner| inner.use_native_tls())
     }
 
-    /// Force using the Rustls TLS backend.
+    /// Select BoringSSL using the legacy Rustls backend name.
     ///
     /// Since multiple TLS backends can be optionally enabled, this option will
-    /// force the `rustls` backend to be used for this `Client`.
+    /// force the BoringSSL backend (the method name is retained for compatibility) to be used for this `Client`.
     ///
     /// # Optional
     ///
-    /// This requires the optional `rustls(-...)` feature to be enabled.
+    /// This requires the optional `boring` (or its legacy `rustls` aliases) feature to be enabled.
     #[cfg(feature = "__rustls")]
     #[cfg_attr(docsrs, doc(cfg(feature = "rustls")))]
     pub fn tls_backend_rustls(self) -> ClientBuilder {
@@ -1111,7 +1113,7 @@ impl ClientBuilder {
     ///
     /// # Optional
     ///
-    /// This requires the optional `default-tls`, `native-tls`, or `rustls(-...)`
+    /// This requires the optional `default-tls`, `native-tls`, or `boring` (or its legacy `rustls` aliases)
     /// feature to be enabled.
     #[cfg(feature = "__tls")]
     #[cfg_attr(
@@ -1139,15 +1141,15 @@ impl ClientBuilder {
     /// # Optional
     ///
     /// This requires one of the optional features `native-tls` or
-    /// `rustls(-...)` to be enabled.
-    #[cfg(any(feature = "__native-tls", feature = "__rustls",))]
+    /// `boring` (or its legacy `rustls` aliases) to be enabled.
+    #[cfg(any(reqwest_native_tls, feature = "__rustls",))]
     #[cfg_attr(docsrs, doc(cfg(any(feature = "native-tls", feature = "rustls"))))]
     pub fn tls_backend_preconfigured(self, tls: impl Any) -> ClientBuilder {
         self.with_inner(move |inner| inner.tls_backend_preconfigured(tls))
     }
 
     /// Deprecated: use [`ClientBuilder::tls_backend_preconfigured()`] instead.
-    #[cfg(any(feature = "__native-tls", feature = "__rustls",))]
+    #[cfg(any(reqwest_native_tls, feature = "__rustls",))]
     pub fn use_preconfigured_tls(self, tls: impl Any) -> ClientBuilder {
         self.with_inner(move |inner| inner.use_preconfigured_tls(tls))
     }
